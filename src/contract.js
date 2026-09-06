@@ -42,6 +42,22 @@ export const FEED_TYPES = new Set([
 export const DWELL_THRESHOLD_MIN = 5
 
 /**
+ * Which events a dispatcher should actually see.
+ *
+ * Several rest areas sit closer to the highway than their own fence radius, so
+ * every truck that drives past trips the geofence. That is real telematics
+ * behaviour and the log records all of it — but a feed full of "arrived" and
+ * "passed without stopping" for trucks that never left the mainline is noise.
+ * The log keeps everything; this decides what surfaces.
+ */
+export function isFeedWorthy(e) {
+  if (!FEED_TYPES.has(e.type)) return false
+  if (e.type === EVENT.FENCE_ENTER) return Boolean(e.intended)
+  if (e.type === EVENT.FENCE_EXIT) return e.dwellMin >= DWELL_THRESHOLD_MIN
+  return true
+}
+
+/**
  * How far ahead of a site a truck begins pulling off the mainline, in km.
  *
  * Trucks drive the corridor polyline, but sites sit a few hundred metres off it

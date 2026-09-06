@@ -1,0 +1,288 @@
+/* Corridor — an operations console. Dense, dark, high contrast, readable on a
+   phone in a demo room with the lights up. */
+
+:root {
+  --bg: #0b0e13;
+  --panel: #141a24;
+  --panel-2: #1b2331;
+  --line: #293343;
+  --text: #e6ebf2;
+  --muted: #8b97a8;
+  --accent: #4ea3ff;
+  --ok: #3ddc97;
+  --warn: #ffb020;
+  --crit: #ff6b5e;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; cursor: pointer; }
+a { color: var(--accent); }
+
+/* ---------- shell ---------- */
+
+.app { display: flex; flex-direction: column; height: 100%; }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.brand { font-weight: 700; letter-spacing: 0.02em; }
+.brand span { color: var(--accent); }
+
+.topbar .spacer { flex: 1; }
+
+.clock { font-family: var(--mono); color: var(--muted); }
+
+.nav { display: flex; gap: 4px; }
+
+.nav button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 5px 11px;
+  color: var(--muted);
+}
+.nav button:hover { color: var(--text); }
+.nav button[aria-current='true'] {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.ghost {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 11px;
+  color: var(--muted);
+}
+.ghost:hover { color: var(--text); border-color: var(--muted); }
+.ghost[aria-current='true'] { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
+
+/* ---------- layout ---------- */
+
+.board { display: flex; flex: 1; min-height: 0; }
+.board .map-wrap { flex: 1; min-width: 0; position: relative; }
+.rail {
+  width: 370px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.page { flex: 1; overflow-y: auto; padding: 18px; }
+.page-narrow { max-width: 900px; margin: 0 auto; }
+
+.panel { border-bottom: 1px solid var(--line); }
+.panel h2 {
+  margin: 0;
+  padding: 11px 14px 9px;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel h2 .count { color: var(--text); font-family: var(--mono); }
+
+.note {
+  padding: 0 14px 11px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ---------- parking ---------- */
+
+.lot {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: 'name fig' 'sub fig' 'bar bar';
+  gap: 3px 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+}
+.lot:first-of-type { border-top: none; }
+.lot-name { grid-area: name; font-weight: 600; }
+.lot-sub { grid-area: sub; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.lot-fig { grid-area: fig; align-self: center; text-align: right; font-family: var(--mono); }
+.lot-fig b { font-size: 19px; display: block; line-height: 1.05; }
+.lot-fig small { color: var(--muted); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+.bar { grid-area: bar; margin-top: 4px; height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 2px; }
+
+.level-open   .bar i, .pill.level-open   { background: var(--ok); }
+.level-filling .bar i, .pill.level-filling { background: var(--accent); }
+.level-tight  .bar i, .pill.level-tight  { background: var(--warn); }
+.level-full   .bar i, .pill.level-full   { background: var(--crit); }
+
+.pill {
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #0b0e13;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- feed ---------- */
+
+.feed { list-style: none; margin: 0; padding: 0; }
+.feed li {
+  display: flex;
+  gap: 10px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.feed li:first-child { border-top: none; }
+.feed time { font-family: var(--mono); color: var(--muted); flex-shrink: 0; }
+.feed .who { font-family: var(--mono); color: var(--accent); }
+.feed .alarm { background: rgba(255, 107, 94, 0.1); }
+.feed .alarm .who { color: var(--crit); }
+
+/* ---------- hours of service ---------- */
+
+.hos { font-family: var(--mono); font-weight: 700; }
+.hos-ok { color: var(--ok); }
+.hos-warn { color: var(--warn); }
+.hos-critical, .hos-violation { color: var(--crit); }
+
+.dial {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--mono);
+}
+.dial b { font-size: 34px; letter-spacing: -0.02em; }
+
+/* ---------- cards, tables, forms ---------- */
+
+.cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+}
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.card .big { font-family: var(--mono); font-size: 27px; letter-spacing: -0.02em; }
+.card .sub { color: var(--muted); font-size: 12px; margin-top: 3px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; }
+td.num, th.num { text-align: right; font-family: var(--mono); }
+
+.form { display: grid; gap: 11px; max-width: 340px; }
+.form label { display: grid; gap: 5px; font-size: 12px; color: var(--muted); }
+.form input {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 11px;
+  color: var(--text);
+  font: inherit;
+}
+.form input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.form .go {
+  background: var(--accent);
+  color: #04101f;
+  border: 0;
+  border-radius: 7px;
+  padding: 10px;
+  font-weight: 700;
+}
+.err { color: var(--crit); font-size: 13px; }
+
+.tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+.tabs button { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 7px 13px; color: var(--muted); }
+.tabs button[aria-pressed='true'] { color: var(--text); border-color: var(--accent); }
+
+.banner {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: 7px;
+  padding: 10px 13px;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.55;
+}
+.banner strong { color: var(--text); }
+
+.prose { white-space: pre-wrap; line-height: 1.6; }
+
+/* ---------- map ---------- */
+
+.leaflet-container { height: 100%; width: 100%; background: #0e131b; }
+/* Invert-then-rotate-hue is the recipe that turns a light raster into a usable
+   dark map: the inversion darkens it, and the 180deg rotation puts water and
+   greenery back on the right side of the colour wheel. */
+.leaflet-tile { filter: invert(1) hue-rotate(180deg) brightness(0.94) contrast(0.86) saturate(0.7); }
+.leaflet-control-attribution { background: rgba(11,14,19,0.8) !important; color: var(--muted) !important; }
+.leaflet-control-attribution a { color: var(--muted) !important; }
+
+.truck-icon div {
+  width: 11px; height: 11px;
+  border-radius: 2px;
+  border: 1px solid rgba(0,0,0,0.55);
+}
+.map-legend {
+  position: absolute; z-index: 500; left: 12px; bottom: 22px;
+  background: rgba(20,26,36,0.93);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 12px;
+}
+.map-legend div { display: flex; align-items: center; gap: 7px; margin-top: 4px; }
+.map-legend div:first-of-type { margin-top: 6px; }
+.map-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.map-legend b { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+
+/* ---------- responsive: judges open this on a phone ---------- */
+
+@media (max-width: 860px) {
+  /* The topbar was wrapping to three rows on a phone, eating a quarter of the
+     screen before any fleet data appeared. */
+  .topbar .feeds, .topbar .wide-only { display: none; }
+  .board { flex-direction: column; }
+  .board .map-wrap { height: 46vh; flex: none; }
+  .rail { width: auto; border-left: 0; border-top: 1px solid var(--line); flex: 1; }
+  .topbar { padding: 9px 12px; gap: 9px; }
+  .page { padding: 13px; }
+}

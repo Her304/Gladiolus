@@ -1,4 +1,4 @@
-import { EVENT, FEED_TYPES, DWELL_THRESHOLD_MIN } from '../contract.js'
+import { EVENT, FEED_TYPES, DWELL_THRESHOLD_MIN, isFeedWorthy } from '../contract.js'
 
 export { EVENT, FEED_TYPES }
 
@@ -138,7 +138,7 @@ export function createStore() {
     events.push(e)
     // A separate capped feed array keeps the human feed O(1) instead of a
     // backwards scan across tens of thousands of pings.
-    if (FEED_TYPES.has(type)) {
+    if (isFeedWorthy(e)) {
       feedEvents.push(e)
       if (feedEvents.length > 400) feedEvents.splice(0, feedEvents.length - 400)
     }

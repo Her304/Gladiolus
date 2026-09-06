@@ -153,8 +153,11 @@ export function createSimulator(store, { startHour = 14 } = {}) {
     if (tr.kind === 'enter') {
       t.insideSiteId = tr.site.id
       t.enteredAt = clock
+      // Did the truck mean to come here, or is it just passing close enough to
+      // trip the fence? Only the former is worth a dispatcher's attention.
+      const intended = tr.site.id === t.destinationId || tr.site.id === t.claimedSiteId
       store.append(EVENT.FENCE_ENTER, clock, {
-        truckId: t.id, siteId: tr.site.id, siteName: tr.site.name,
+        truckId: t.id, siteId: tr.site.id, siteName: tr.site.name, intended,
       })
 
       if (tr.site.kind === 'stop' && tr.site.id === t.destinationId) {

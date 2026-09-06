@@ -16,6 +16,22 @@ with a historical time-of-day curve where the sample is thin. That blend — liv
 signal plus learned pattern — is the same shape as a traffic layer, at a scale
 where forty trucks make it achievable by hand.
 
+The second addition is **empty miles**. A truck running without freight is the
+industry's most expensive habit, and the corridor's geometry is what lets us
+attack it cheaply: the 401 is a line, every site carries a chainage, so the
+distance between dropping one load and collecting the next is a scalar
+subtraction rather than a geo query. Minimising the total of those gaps has a
+closed form — sort trucks and open loads by chainage and match them in order,
+which is provably optimal because any crossing pair of empty legs can be
+uncrossed without increasing total distance. The naive dispatch everyone assumes
+is happening — first free truck takes the next load — is the baseline we beat,
+and we beat it with a sort rather than a solver.
+
+Those two additions are one decision, not two. A truck that finishes its
+ten-hour reset in the wrong rest area has already spent tomorrow's empty
+kilometres. Parking choice *is* a dispatch choice, and saying that out loud is
+what makes Corridor more than a parking app.
+
 The intended outcome is a deployed, shareable URL showing four surfaces
 (dispatch, driver, dashboard, customer) driven by a single append-only event log.
 
@@ -56,9 +72,15 @@ to say out loud when a judge asks how this maps to real trucks.
 
 ```
 simulator (physics) ──emits──▶ event log ──fold──▶ world ──▶ views
-                                   ▲
-              511 / TomTom ────────┘  (edge weights: live speed factors)
+                                  ▲  ▲                │
+             511 / TomTom ────────┘  └─── dispatch ◀──┘
+             (live edge weights)       (assignments are events too)
 ```
+
+Dispatch sits on the same loop as everything else: it is a pure function of the
+world that appends `load.assigned` events back to the log. It holds no state of
+its own, so a replay reproduces every assignment decision, and the empty-mile
+number on the dashboard is reconstructible rather than asserted.
 
 ---
 
@@ -74,6 +96,7 @@ immediately, without waiting for Lane A.
 export const EVENT = {
   PING: 'truck.ping',
   FENCE_ENTER: 'fence.enter',      FENCE_EXIT: 'fence.exit',
+  LOAD_POSTED: 'load.posted',
   LOAD_ASSIGNED: 'load.assigned',  LOAD_DELIVERED: 'load.delivered',
   BREAK_START: 'hos.break.start',  BREAK_END: 'hos.break.end',
   PARKING_CLAIM: 'parking.claim',  PARKING_RELEASE: 'parking.release',
@@ -86,9 +109,18 @@ export const EVENT = {
 //   destinationId, state('driving'|'dwelling'|'resting'),
 //   drivingMs, onDutyMs, insideSiteId, claimedSiteId, parked
 //
+// Load:
+//   { id, originId, destId, originChainage, destChainage, readyAt, dueAt,
+//     status('open'|'assigned'|'delivered'), truckId }
+//
 // World:
-//   { clock, trucks:{[id]:Truck}, sites:{[id]:{occupants[],claims[],visits}},
-//     dwells:[{truckId,siteId,minutes,at}], ladenKm, emptyKm }
+//   { clock, trucks:{[id]:Truck}, loads:{[id]:Load},
+//     sites:{[id]:{occupants[],claims[],visits}},
+//     dwells:[{truckId,siteId,minutes,at}],
+//     ladenKm, deadheadKm, idleKm, emptyKm }
+//
+// emptyKm is derived: deadheadKm + idleKm. One bucket hides the half we can
+// actually fix — see trap 14.
 //
 // Pressure (one per parking site):
 //   { site, observed, claims, inbound[], historical, confidence,
@@ -101,10 +133,12 @@ createSimulator(store, {startHour}) -> { bootstrap(), advance(realDtMs),
                     setIncidents(), setFlow(), setSpeed(n), getClock(), getTruck(id) }
 pressureBoard(world, date)          -> Pressure[]
 recommendParking(truck, world, date)-> { best, alternatives, reach, viable } | null
+planAssignments(world, date, policy)-> [{ truckId, loadId, emptyKm }]
+  policy: 'corridor' (default) | 'naive' — the baseline we measure against
 hosStatus(truck) -> 'ok'|'warn'|'critical'|'violation'
 clockLeftMs(truck) -> ms
 
-export function mockWorld() { /* 6 hand-written trucks + 3 sites, frozen */ }
+export function mockWorld() { /* 6 trucks + 3 sites + 4 loads, frozen */ }
 ```
 
 Also written in this window, by the same person: `src/App.jsx` as a bare shell
@@ -124,26 +158,52 @@ Owns `src/engine/*`, `src/data/*`, `scripts/smoke.mjs`.
    ordered west to east so chainage increases eastbound), 8 stop sites, 6 rest
    areas with real space counts. Each site carries its `chainage` so route
    projection is a scalar comparison, not a geo query.
-2. `engine/geo.js` — haversine, bearing, `measurePath`, `positionAt`,
+2. `data/loads.js` — a seeded day's freight between the stop sites, deliberately
+   asymmetric (the westbound lane is thinner, which is what creates empty miles
+   in the first place). Loads enter the world as `load.posted` events, not as a
+   fixture the dispatcher reads directly — otherwise replay stops reproducing
+   assignment decisions and the log is no longer the source of truth.
+3. `engine/geo.js` — haversine, bearing, `measurePath`, `positionAt`,
    `headingAt`, `chainageOf`. Roughly 80 lines, no library. `measurePath` is the
    cheap stand-in for the shortcut pre-processing a real router does: build the
    expensive structure once, query it many times.
-3. `engine/events.js` — the log, `applyEvent` (total: an unknown type advances
+4. `engine/events.js` — the log, `applyEvent` (total: an unknown type advances
    the clock and nothing else), `rebuild(events)` for replay, and `createStore`.
-4. `engine/geofence.js` — enter/exit with hysteresis.
-5. `engine/hos.js` — Canadian federal cycle simplified to the two limits that
+5. `engine/geofence.js` — enter/exit with hysteresis.
+6. `engine/hos.js` — Canadian federal cycle simplified to the two limits that
    drive the parking decision: 13 h driving, 14 h on-duty, 10 h reset. Plus
    `reachableKm`, the scalar that turns an HOS clock into a point on the map.
-6. `engine/parking.js` — the differentiator. See traps 2 and 8.
-7. `engine/simulator.js` — three-state machine per truck
+7. `engine/parking.js` — the differentiator. See traps 2 and 8. The site score
+   also carries a small deadhead term — distance from the rest area to the
+   origin of the load this truck most likely takes next — weighted low enough
+   that availability still dominates. We never trade a legal park for a shorter
+   empty leg; we break ties with it.
+8. `engine/dispatch.js` — the empty-mile engine, ~50 lines. Cost of pairing a
+   truck to a load is `|load.originChainage − truck.chainage|`, plus a backtrack
+   multiplier when the pickup is behind the truck, plus a wait-versus-drive term
+   (holding a truck 40 minutes beats driving it 90 km empty). Feasibility gate:
+   the empty leg must fit inside `reachableKm(truck)`. With pure distance and
+   equal counts the optimal matching is the sorted one; with the constraints on
+   it, fall back to globally-sorted greedy and a 2-opt uncross pass, which is
+   the same non-crossing argument applied locally. Also exports the `naive`
+   policy — first free truck takes the next load — because the baseline has to
+   run on the same seed to mean anything. See traps 13 and 14.
+9. `engine/simulator.js` — three-state machine per truck
    (`driving`/`dwelling`/`resting`), capacity-aware claims, forced roadside stops.
-8. `scripts/smoke.mjs` — the gate. Runs 8 sim hours headlessly and asserts:
-   replay reproduces the live world; exits never outnumber enters; no truck
-   drives more than an hour past the 13 h limit; every parking estimate is
-   bounded by capacity; a recommendation is always ahead of the truck and inside
-   its reach.
+10. `scripts/smoke.mjs` — the gate. Runs 8 sim hours headlessly and asserts:
+    replay reproduces the live world; exits never outnumber enters; no truck
+    drives more than an hour past the 13 h limit; every parking estimate is
+    bounded by capacity; a recommendation is always ahead of the truck and
+    inside its reach; no load is assigned to two trucks at once;
+    `deadheadKm + idleKm` equals `emptyKm` after replay; and the corridor
+    policy's empty kilometres are strictly below the naive policy's on the
+    same seed.
 
 **Lane A is not done until `node scripts/smoke.mjs` exits 0.**
+
+Loads and dispatch add roughly 25 minutes to this lane, which the two hours do
+not contain for free. It is paid for out of Lane C's `services/llm.js` — see
+that lane for what shrinks.
 
 ### Lane B — map and the two live surfaces
 Owns `src/components/*`, `src/views/DispatchBoard.jsx`, `src/views/DriverView.jsx`,
@@ -159,9 +219,13 @@ Owns `src/components/*`, `src/views/DispatchBoard.jsx`, `src/views/DriverView.js
 - `EventFeed.jsx` — reverse-chronological, human-readable, `FORCED_STOP` styled
   loudly. That event is the failure the product prevents; it is the demo's best
   moment.
-- `DispatchBoard.jsx` — map + feed + parking panel + sim speed control.
+- `DispatchBoard.jsx` — map + feed + parking panel + sim speed control, plus a
+  live empty-mile readout (laden / deadhead / idle) and the policy toggle. The
+  toggle is the demo: flip it and the number moves.
 - `DriverView.jsx` — one truck: load, next stop, HOS clock, parking
-  recommendation with alternatives.
+  recommendation with alternatives. Show the next pickup and the empty
+  kilometres to reach it, so the driver sees the same number dispatch is
+  optimising.
 - `CustomerView.jsx` — read-only single-load tracking at `/t/:token`.
 
 Build all of it against `mockWorld()`.
@@ -178,13 +242,19 @@ Owns `src/services/*`, `src/fixtures/*`, `src/auth/*`, `src/views/Dashboard.jsx`
 - `services/tomtom.js` — sample 8 fixed points along the corridor every 3 min,
   not per truck. That is ~1,280 calls/day against a 2,500 free-tier ceiling,
   with room for a second demo run.
-- `services/llm.js` — backhaul reasoning, drafted customer emails, board queries.
-  Every call wrapped, every call with a cached fallback.
+- `services/llm.js` — drafted customer emails, board queries, and a plain-English
+  narration of the assignment `engine/dispatch.js` already made. It explains, it
+  does not decide: the solver is deterministic and provable, an LLM is neither,
+  and this is what pays for Lane A's extra 25 minutes. Every call wrapped, every
+  call with a cached fallback.
 - `auth/AuthContext.jsx` — seeded users, PIN for drivers, email/password for
   dispatch, signed link for customers. Deliberately not production-grade; say so
   plainly in the README and if a judge asks.
 - `views/Dashboard.jsx` — Recharts: dwell league table, empty-kilometre trend,
-  utilisation.
+  utilisation. The trend carries two lines on the same seed, naive and corridor,
+  and the headline number is the gap between them. Split the empty bar into
+  deadhead and idle: the second is the addressable half and the one that should
+  visibly shrink.
 - Deploy to Vercel or Netlify. Static build.
 
 ---
@@ -229,6 +299,23 @@ Owns `src/services/*`, `src/fixtures/*`, `src/auth/*`, `src/views/Dashboard.jsx`
     feed is O(1) rather than a backwards scan across tens of thousands of pings.
 12. **Seed everything deterministically** (mulberry32). The demo must look
     identical on every judge's phone.
+13. **Greedy per-truck assignment is itself the trap.** Walking the truck list
+    and giving each one its nearest open load looks reasonable and is measurably
+    worse, because the first truck takes a load a later truck was sitting on top
+    of. Assign globally or not at all. On a line the fix is free — sort both
+    sides by chainage, match in order — so there is no excuse for the greedy
+    version except as the baseline we deliberately keep around to beat.
+14. **One `emptyKm` bucket hides the half we can fix.** Empty movement toward a
+    committed pickup is repositioning and largely irreducible; empty movement
+    with no load assigned is waste. Folded into a single number they cannot be
+    told apart and the chart cannot show progress. Split at the fold: `laden ?
+    ladenKm : loadId ? deadheadKm : idleKm`, and keep `emptyKm` as the derived
+    sum so nothing downstream breaks.
+15. **A load must never be assigned twice.** `planAssignments` is re-run every
+    tick against a world that already contains last tick's assignments, so it
+    must filter on `status === 'open'` and the fold must reject a
+    `load.assigned` for a load already held. Without both, a load ping-pongs
+    between trucks and the empty-kilometre count quietly inflates.
 
 ---
 
@@ -239,6 +326,8 @@ Owns `src/services/*`, `src/fixtures/*`, `src/auth/*`, `src/views/Dashboard.jsx`
    `useSyncExternalStore` against `store.subscribe` / `store.getVersion` so the
    40-truck map does not re-fold on every render.
 3. Wire the sim loop: `setInterval(() => sim.advance(500), 500)`, default 30×.
+   Run `planAssignments` on the same tick, before `commit()`, so assignments and
+   telemetry land in one batch and the views see a consistent world.
 4. Feed live services in: `sim.setIncidents()` and `sim.setFlow()`.
 5. `npm run build && npx vite preview` before pushing anywhere.
 6. Deploy, then open the URL on an actual phone. Minutes 105–120 are buffer.
@@ -249,8 +338,12 @@ Owns `src/services/*`, `src/fixtures/*`, `src/auth/*`, `src/views/Dashboard.jsx`
 
 - **Engine:** `node scripts/smoke.mjs` exits 0. This is the merge gate for Lane A.
 - **Replay invariant:** `rebuild(store.events)` must reproduce the live world —
-  same dwell count, same empty km, same truck count. If this breaks, the log has
-  stopped being the source of truth.
+  same dwell count, same empty km, same truck count, same load statuses. If this
+  breaks, the log has stopped being the source of truth.
+- **Empty-mile invariant:** on one fixed seed and one fixed load set, the
+  corridor policy must come in under the naive policy. If it does not, the bug
+  is in the cost function, not in the sim — say so rather than reseeding until
+  the number looks good.
 - **UI:** `npm run dev`, then check each surface — dispatch board renders 40
   trucks and a populated parking panel on the first frame; driver PIN login
   reaches a single-truck view with a live HOS clock; dashboard renders all three
@@ -266,6 +359,12 @@ Owns `src/services/*`, `src/fixtures/*`, `src/auth/*`, `src/views/Dashboard.jsx`
 
 - `FLEET_SHARE = 0.06` (40 trucks ≈ 6% of corridor traffic) is an assumption, not
   a measurement. It is surfaced in the UI on purpose.
+- **The empty-mile improvement is a claim about two algorithms, not about real
+  fleets.** We control both the policy and the load generator, so a headline
+  percentage is not evidence on its own. What is defensible: the load set and
+  the seed are held fixed and only the policy varies, which makes the delta a
+  real property of the matching. Say that before a judge asks, not after. The
+  same caveat goes in the README.
 - Auth is seeded and compared in the browser. Prototype-scoped, not an oversight.
 - The LLM key ships to the client. Acceptable on a throwaway key for a demo;
   in production this belongs behind a function. Flag it in the README.
