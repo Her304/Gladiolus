@@ -1,7 +1,7 @@
 # Corridor
 
 Fleet telemetry for the Highway 401 corridor, Windsor to Toronto. Forty trucks,
-four surfaces, one append-only event log.
+five surfaces, one append-only event log.
 
 ```bash
 npm install && npm run dev
@@ -10,10 +10,18 @@ npm install && npm run dev
 Then open http://localhost:5173. No API keys, no `.env`, no network required —
 every keyed service falls back to a bundled fixture.
 
-**Demo credentials.** Dispatch: `dispatch@gladiolus.ca` / `corridor`. Driver:
-any truck number `GLD-101`…`GLD-140` with its seeded PIN (the sign-in form
-pre-fills a working pair). The customer tracking link is generated from the
-dispatch topbar.
+**Demo credentials.** Dispatch: `dispatch@gladiolus.ca` / `corridor`. Admin:
+`admin@gladiolus.ca` / `corridor`. Driver: any truck number `GLD-101`…`GLD-140`
+with its seeded PIN (the sign-in form pre-fills a working pair). The customer
+tracking link is generated from the dispatch topbar.
+
+| Surface | Route | Who |
+|---|---|---|
+| Dispatch board | `#/board` | dispatch, admin |
+| Dashboard | `#/dashboard` | dispatch, admin |
+| Admin console | `#/admin` | admin |
+| Driver | default | driver |
+| Customer tracking | `#/t/<token>` | public, no sign-in |
 
 ---
 
@@ -59,6 +67,37 @@ simulator (physics) ──emits──▶ event log ──fold──▶ world ─
 | `src/engine/simulator.js` | The physical model |
 | `src/engine/metrics.js` | Dashboard folds |
 | `src/services/` | Ontario 511, TomTom, the LLM layer |
+| `src/admin/settings.js` | Administrator overrides on corridor configuration |
+| `src/admin/audit.js` | Administrator actions, appended to the log like any other event |
+
+### The admin console
+
+The fifth surface sits *above* dispatch rather than beside it. Dispatch answers
+"what should this truck do in the next hour"; the console answers "what is this
+system configured to be", so nothing on it dispatches anything. Five tabs:
+**Access** (the seeded directory and roles), **Fleet** (all forty trucks, the
+board's six in full), **Sites** (corridor configuration), **Integrations**
+(feed sources, key presence, engine constants), **Audit** (the administrator
+trail and a filterable inspector over the raw log).
+
+It writes exactly one class of thing — parking capacity — and that write is
+genuinely live: `pressureFor` reads `site.spaces` on every call, so an edit
+moves the parking board, the map colours and the recommender on the next tick.
+Overrides persist to `localStorage` and are applied in `runtime.js` before the
+simulator boots.
+
+Every administrator action is appended to the event log rather than applied as a
+side effect, which is not decoration — a config change that mutated state
+without an event would be the one thing in the system nobody could reconstruct
+by replaying. It also means the audit trail costs a fold rather than a table,
+and the dispatcher sees config changes land in the same feed as everything else.
+
+Fence radii, HOS limits and `FLEET_SHARE` are shown but deliberately read-only.
+The simulator sizes its sub-step from the smallest fence when it is constructed,
+so editing a radius underneath a running sim would silently let trucks step over
+geofences; the rest are frozen constants that `scripts/smoke.mjs` asserts
+invariants in terms of. A console that offered those inputs anyway would be
+lying about what it controls.
 
 ## Verification
 
@@ -83,14 +122,28 @@ nothing is genuinely reachable. **This is the merge gate for the engine.**
 - **Auth is seeded and compared in the browser.** The customer link is encoded,
   not signed. Scoped to the prototype on purpose; none of it should survive
   contact with production.
+- **The admin console is gated by a client-side `if`.** The role comes from a
+  seeded account object compared in the browser and kept in `localStorage`, so
+  anyone who can open devtools can reach it. It is a layout of what an admin
+  surface would own, not an access control — and the console says so on its own
+  first screen rather than only here. The first thing production needs is the
+  role decided server-side, next to the data it guards. The audit trail has the
+  same problem from the other direction: the log is in memory, so it survives
+  exactly as long as the tab, and an administrator can clear their own trail
+  with F5.
 - **The LLM key would ship to the client.** Fine on a throwaway key for a demo,
   wrong in production, where this belongs behind a function. With no key set,
   every AI feature returns a cached response.
 - **Ontario 511 does not reliably send CORS headers.** `vite.config.js` proxies
   `/api/511` in development. A static production build has no such proxy, so it
   runs on the bundled fixture unless you put a serverless function in front of
-  it. Field casing in the response is normalised defensively — check one live
-  payload before demo day rather than trusting the mapping.
+  it. Field casing has been verified against a live payload: all nine fields the
+  normaliser reads are present and PascalCase across all 469 province-wide
+  records.
+- **Corridor filtering needs the road name, not just proximity.** The 401 runs
+  within a few kilometres of HWY 3, HWY 4, the 403 and the QEW, so distance to
+  the polyline alone admits other highways' incidents — 93 records pass the
+  12 km test where only 49 are on the 401. Both tests are applied.
 - **Several rest areas sit closer to the highway than their own fence radius**,
   so passing trucks trip the geofence. That is real telematics behaviour. The
   log records all of it; the dispatcher's feed shows only arrivals the truck

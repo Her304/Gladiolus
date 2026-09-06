@@ -12,12 +12,29 @@ import { chainageOf } from '../engine/geo.js'
  * /api/511 in dev. A static production build needs an equivalent proxy (a
  * serverless function) or it runs on the fixture.
  *
- * Field casing is normalised defensively — verify against one live payload
- * before demo day rather than trusting this mapping.
+ * Field casing is normalised defensively and has been checked against a live
+ * payload: all nine fields read below are present, PascalCase, on all 469
+ * province-wide records. The lowercase fallbacks are belt-and-braces, not a
+ * guess.
  */
 const BASE = import.meta.env?.DEV ? '/api/511' : 'https://511on.ca'
 const TTL_MS = 5 * 60_000
 const CORRIDOR_TOLERANCE_KM = 12
+
+/**
+ * Proximity alone is not enough. In southwestern Ontario the 401 runs within a
+ * few kilometres of HWY 3, HWY 4, the 403 and the QEW, so a purely geometric
+ * filter turns a ramp closure on another highway into a speed penalty on ours.
+ * Measured against a live payload: 93 records pass the 12 km test and only 49
+ * are actually on the 401.
+ *
+ * Matching the bare number rather than a spelling — the live feed says
+ * "HWY 401", the bundled fixture says "Highway 401", other Ontario feeds say
+ * "ON-401". The word boundaries are what keep "HWY 400" and "HWY 4" out, and
+ * the geometry test still runs alongside this, so an exotic false positive
+ * somewhere else in the province is caught by the other half of the filter.
+ */
+const ON_401 = /\b401\b/
 
 let cache = { at: 0, data: null, source: 'none' }
 
@@ -26,11 +43,14 @@ function normalise(raw) {
   const lon = Number(raw.Longitude ?? raw.longitude)
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
   const coord = [lat, lon]
-  // 511 covers the whole province; keep only what is on our corridor.
+  const road = raw.RoadwayName ?? raw.roadwayName ?? 'Unknown road'
+  // 511 covers the whole province. Keep only what is on our corridor, by
+  // geometry *and* by road name — see ON_401 above for why both are needed.
   if (offCorridorKm(coord) > CORRIDOR_TOLERANCE_KM) return null
+  if (!ON_401.test(road)) return null
   return {
     id: String(raw.ID ?? raw.id ?? Math.random()),
-    road: raw.RoadwayName ?? raw.roadwayName ?? 'Unknown road',
+    road,
     direction: raw.DirectionOfTravel ?? raw.directionOfTravel ?? 'Both',
     description: raw.Description ?? raw.description ?? '',
     type: raw.EventType ?? raw.eventType ?? 'unknown',

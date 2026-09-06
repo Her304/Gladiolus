@@ -21,6 +21,8 @@ function describe(e) {
     case EVENT.PARKING_RELEASE: return `gave up its space at ${e.siteName} — ${e.reason}`
     case EVENT.FORCED_STOP:
       return `OUT OF HOURS on the shoulder, ${e.shortfallKm} km short of ${e.nearestSiteName}`
+    case EVENT.ADMIN_ACTION:
+      return e.detail ? `${e.action} — ${e.detail}` : e.action
     default: return e.type
   }
 }
@@ -38,7 +40,7 @@ export default function EventFeed({ events }) {
           <li key={e.seq} className={e.type === EVENT.FORCED_STOP ? 'alarm' : undefined}>
             <time>{fmtTime(e.at)}</time>
             <span>
-              <span className="who">{e.truckId}</span> {describe(e)}
+              <span className="who">{e.truckId || e.actor}</span> {describe(e)}
             </span>
           </li>
         ))}

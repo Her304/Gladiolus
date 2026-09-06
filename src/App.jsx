@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AuthProvider, useAuth, makeCustomerToken } from './auth/AuthContext.jsx'
+import { AuthProvider, useAuth, makeCustomerToken, isStaff, isAdmin } from './auth/AuthContext.jsx'
 import { StoreContext, SimContext, useWorld } from './useStore.js'
 import { store, sim, startRuntime } from './runtime.js'
 import { fetchIncidents, INITIAL_INCIDENTS } from './services/on511.js'
@@ -8,6 +8,7 @@ import DispatchBoard from './views/DispatchBoard.jsx'
 import DriverView from './views/DriverView.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import CustomerView from './views/CustomerView.jsx'
+import AdminConsole from './views/AdminConsole.jsx'
 import SignIn from './views/SignIn.jsx'
 import { fmtTime } from './format.js'
 
@@ -90,8 +91,17 @@ function Shell() {
     )
   }
 
-  const isDispatch = user.role === 'dispatch'
-  const view = isDispatch ? (hash === '#/dashboard' ? 'dashboard' : 'board') : 'driver'
+  const staff = isStaff(user)
+  const admin = isAdmin(user)
+
+  // Routing is a fold over (role, hash) with the role winning, so a driver who
+  // types #/admin lands on their own screen rather than a blank one.
+  let view = 'driver'
+  if (staff) {
+    if (hash === '#/dashboard') view = 'dashboard'
+    else if (hash === '#/admin') view = admin ? 'admin' : 'board'
+    else view = 'board'
+  }
 
   function shareLink() {
     const truck = Object.values(store.getWorld().trucks).find((t) => t.laden)
@@ -105,10 +115,13 @@ function Shell() {
       <header className="topbar">
         <div className="brand">Gladiolus <span>Corridor</span></div>
 
-        {isDispatch && (
+        {staff && (
           <nav className="nav">
             <button aria-current={view === 'board'} onClick={() => go('/board')}>Board</button>
             <button aria-current={view === 'dashboard'} onClick={() => go('/dashboard')}>Dashboard</button>
+            {admin && (
+              <button aria-current={view === 'admin'} onClick={() => go('/admin')}>Admin</button>
+            )}
           </nav>
         )}
 
@@ -117,7 +130,7 @@ function Shell() {
         <span className="clock feeds" title="Where the live layers are coming from">
           511 {feeds.incidents} · flow {feeds.flow}
         </span>
-        {isDispatch && <button className="ghost" onClick={shareLink}>Customer link</button>}
+        {staff && <button className="ghost" onClick={shareLink}>Customer link</button>}
         <button className="ghost" onClick={signOut}>
           Sign out<span className="wide-only"> — {user.name}</span>
         </button>
@@ -125,6 +138,7 @@ function Shell() {
 
       {view === 'board' && <DispatchBoard incidents={incidents} />}
       {view === 'dashboard' && <Dashboard />}
+      {view === 'admin' && <AdminConsole feeds={feeds} />}
       {view === 'driver' && <DriverView />}
     </div>
   )

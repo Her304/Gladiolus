@@ -88,6 +88,7 @@ export const { trucks: SEED_TRUCKS, drivers: SEED_DRIVERS } = seedFleet()
  * it is a scoped prototype decision, not an oversight.
  */
 export const SEED_USERS = [
+  { id: 'U-0', role: 'admin', name: 'Priya Raghunathan', email: 'admin@gladiolus.ca', password: 'corridor' },
   { id: 'U-1', role: 'dispatch', name: 'Kris Aleong', email: 'dispatch@gladiolus.ca', password: 'corridor' },
   { id: 'U-2', role: 'dispatch', name: 'Noor Haddad', email: 'noor@gladiolus.ca', password: 'corridor' },
   ...SEED_DRIVERS.map((d) => ({

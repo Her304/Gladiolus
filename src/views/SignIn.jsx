@@ -5,17 +5,17 @@ import { SEED_DRIVERS } from '../data/seed.js'
 const DEMO_DRIVER = SEED_DRIVERS[0]
 
 export default function SignIn() {
-  const { signInDriver, signInDispatch } = useAuth()
+  const { signInDriver, signInDispatch, signInAdmin } = useAuth()
   const [tab, setTab] = useState('dispatch')
   const [error, setError] = useState(null)
 
   function submit(e) {
     e.preventDefault()
     const f = new FormData(e.currentTarget)
-    const res =
-      tab === 'driver'
-        ? signInDriver(f.get('truckId'), f.get('pin'))
-        : signInDispatch(f.get('email'), f.get('password'))
+    let res
+    if (tab === 'driver') res = signInDriver(f.get('truckId'), f.get('pin'))
+    else if (tab === 'admin') res = signInAdmin(f.get('email'), f.get('password'))
+    else res = signInDispatch(f.get('email'), f.get('password'))
     setError(res.ok ? null : res.error)
   }
 
@@ -28,14 +28,22 @@ export default function SignIn() {
         <button aria-pressed={tab === 'driver'} onClick={() => { setTab('driver'); setError(null) }}>
           Driver
         </button>
+        <button aria-pressed={tab === 'admin'} onClick={() => { setTab('admin'); setError(null) }}>
+          Admin
+        </button>
       </div>
 
       <form className="form" onSubmit={submit} key={tab}>
-        {tab === 'dispatch' ? (
+        {tab !== 'driver' ? (
           <>
             <label>
               Email
-              <input name="email" type="email" defaultValue="dispatch@gladiolus.ca" autoComplete="off" />
+              <input
+                name="email"
+                type="email"
+                defaultValue={tab === 'admin' ? 'admin@gladiolus.ca' : 'dispatch@gladiolus.ca'}
+                autoComplete="off"
+              />
             </label>
             <label>
               Password

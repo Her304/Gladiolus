@@ -1,5 +1,10 @@
 import { createStore } from './engine/events.js'
 import { createSimulator } from './engine/simulator.js'
+// Imported for effect, and the order matters: applying persisted administrator
+// overrides onto the site objects has to happen before `bootstrap()` reads
+// them, so it belongs here in the module that owns boot order rather than in
+// whichever panel happens to render first.
+import './admin/settings.js'
 
 /**
  * Module-level singletons. React 19 StrictMode mounts effects twice in

@@ -246,6 +246,75 @@ td.num, th.num { text-align: right; font-family: var(--mono); }
 
 .prose { white-space: pre-wrap; line-height: 1.6; }
 
+/* ---------- admin console ---------- */
+
+.admin-head { margin-bottom: 14px; }
+.admin-head h1 { font-size: 19px; margin: 0 0 3px; letter-spacing: -0.01em; }
+
+.banner-warn { border-left-color: var(--crit); }
+.banner code, .note code { font-family: var(--mono); color: var(--text); }
+
+.card h3 .count { color: var(--muted); font-family: var(--mono); font-weight: 500; margin-left: 6px; }
+
+/* A toolbar line: heading on the left, controls pushed right, wrapping on a
+   phone rather than overflowing the card. */
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row h3 { margin: 0; }
+
+/* Two-column read-only detail list. */
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 13px; align-items: baseline; }
+.kv span { color: var(--muted); }
+.kv b { font-weight: 600; }
+
+.field {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 9px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+.field:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.field.cell { width: 68px; text-align: right; font-family: var(--mono); padding: 3px 7px; }
+
+/* Long tables scroll inside their card with the header pinned, so the page
+   itself never grows to forty rows of truck. */
+.scroll-y { max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: 7px; }
+.scroll-y.tall { max-height: 520px; }
+.scroll-y table { font-size: 12.5px; }
+.scroll-y thead th { position: sticky; top: 0; background: var(--panel-2); z-index: 1; }
+
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+
+.tag {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  vertical-align: middle;
+}
+.tag:first-child { margin-left: 0; }
+.tag-admin { background: rgba(78, 163, 255, 0.16); color: var(--accent); }
+.tag-dispatch { background: rgba(61, 220, 151, 0.14); color: var(--ok); }
+.tag-live { background: rgba(61, 220, 151, 0.14); color: var(--ok); }
+.tag-owned { background: rgba(255, 176, 32, 0.14); color: var(--warn); }
+.tag-laden { background: rgba(78, 163, 255, 0.14); color: var(--accent); }
+
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+/* Payload cells hold arbitrary JSON; one line each, truncated. */
+.clip { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+tr.alarm td { background: rgba(255, 107, 94, 0.1); }
+
 /* ---------- map ---------- */
 
 .leaflet-container { height: 100%; width: 100%; background: #0e131b; }
@@ -285,4 +354,8 @@ td.num, th.num { text-align: right; font-family: var(--mono); }
   .rail { width: auto; border-left: 0; border-top: 1px solid var(--line); flex: 1; }
   .topbar { padding: 9px 12px; gap: 9px; }
   .page { padding: 13px; }
+  /* The admin tables are genuinely wide. Scroll them inside their own card
+     rather than letting the page scroll sideways. */
+  .card { overflow-x: auto; }
+  .clip { max-width: 180px; }
 }

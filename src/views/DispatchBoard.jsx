@@ -8,6 +8,7 @@ import { hosStatus, clockLeftMs, fmtClock } from '../engine/hos.js'
 import { ask, summariseBoard } from '../services/llm.js'
 
 const SPEEDS = [10, 30, 60, 120]
+const INCIDENT_ROWS = 8
 
 export default function DispatchBoard({ incidents }) {
   const world = useWorld()
@@ -123,12 +124,24 @@ export default function DispatchBoard({ incidents }) {
 
         <section className="panel">
           <h2>Road conditions <span className="count">{incidents.length}</span></h2>
-          {incidents.map((i) => (
-            <div key={i.id} className="lot" style={{ display: 'block' }}>
-              <div className="lot-name">{i.road} — {i.direction}</div>
-              <div className="lot-sub" style={{ whiteSpace: 'normal' }}>{i.description}</div>
-            </div>
-          ))}
+          {/*
+            Every incident still feeds speedFactorAt; the cap is display only.
+            A live corridor pull is ~49 entries, which buries the rest of the
+            board on a phone. Full closures first — they are the ones that
+            change a dispatcher's mind.
+          */}
+          {[...incidents]
+            .sort((a, b) => Number(b.fullClosure) - Number(a.fullClosure))
+            .slice(0, INCIDENT_ROWS)
+            .map((i) => (
+              <div key={i.id} className="lot" style={{ display: 'block' }}>
+                <div className="lot-name">{i.road} — {i.direction}</div>
+                <div className="lot-sub" style={{ whiteSpace: 'normal' }}>{i.description}</div>
+              </div>
+            ))}
+          {incidents.length > INCIDENT_ROWS && (
+            <div className="lot-sub">+{incidents.length - INCIDENT_ROWS} more on the corridor</div>
+          )}
         </section>
       </aside>
     </div>

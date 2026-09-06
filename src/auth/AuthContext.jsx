@@ -12,6 +12,10 @@ const AuthCtx = createContext(null)
 
 const SESSION_KEY = 'corridor.session'
 
+/** Staff see the board; admins see the board and the console above it. */
+export const isStaff = (u) => u?.role === 'dispatch' || u?.role === 'admin'
+export const isAdmin = (u) => u?.role === 'admin'
+
 /** A customer link carries the load it may view. Encoded, not signed. */
 export function makeCustomerToken(loadId, truckId) {
   return btoa(JSON.stringify({ loadId, truckId })).replace(/=+$/, '')
@@ -48,6 +52,15 @@ function persist(user) {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(restore)
 
+  /** Email-and-password roles differ only in which role they will accept. */
+  function matchByEmail(role, email, password) {
+    return SEED_USERS.find(
+      (u) => u.role === role &&
+        u.email.toLowerCase() === String(email).trim().toLowerCase() &&
+        u.password === password,
+    )
+  }
+
   const value = useMemo(
     () => ({
       user,
@@ -65,11 +78,20 @@ export function AuthProvider({ children }) {
       },
       /** Dispatchers use email and password. */
       signInDispatch(email, password) {
-        const found = SEED_USERS.find(
-          (u) => u.role === 'dispatch' &&
-            u.email.toLowerCase() === String(email).trim().toLowerCase() &&
-            u.password === password,
-        )
+        const found = matchByEmail('dispatch', email, password)
+        if (!found) return { ok: false, error: 'Those credentials do not match.' }
+        setUser(found)
+        persist(found)
+        return { ok: true }
+      },
+      /**
+       * Administrators, same as dispatch with a different role. Worth being
+       * blunt: this is a client-side equality check against a bundled list, so
+       * the admin console is gated by an `if` that anyone can edit in devtools.
+       * A real console needs the role decided by a server that holds the data.
+       */
+      signInAdmin(email, password) {
+        const found = matchByEmail('admin', email, password)
         if (!found) return { ok: false, error: 'Those credentials do not match.' }
         setUser(found)
         persist(found)

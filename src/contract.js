@@ -20,6 +20,7 @@ export const EVENT = {
   PARKING_RELEASE: 'parking.release',
   FORCED_STOP: 'hos.forced_stop',
   INCIDENT: 'traffic.incident',
+  ADMIN_ACTION: 'admin.action',
 }
 
 /** Events a human should see in the feed. Pings are far too noisy. */
@@ -33,6 +34,10 @@ export const FEED_TYPES = new Set([
   EVENT.PARKING_CLAIM,
   EVENT.FORCED_STOP,
   EVENT.INCIDENT,
+  // An administrator changing corridor configuration is operationally relevant
+  // to the dispatcher watching the board, so it surfaces in the same feed
+  // rather than in a private admin-only channel.
+  EVENT.ADMIN_ACTION,
 ])
 
 /**

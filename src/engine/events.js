@@ -13,6 +13,7 @@ export function emptyWorld() {
     trucks: {},
     sites: {},
     dwells: [],
+    adminLog: [],
     ladenKm: 0,
     emptyKm: 0,
     transits: 0,
@@ -106,6 +107,18 @@ export function applyEvent(world, e) {
     }
     case EVENT.FORCED_STOP: {
       world.forcedStops += 1
+      break
+    }
+    // The audit trail is a fold like every other view, not a side table. An
+    // admin action that never reached the log did not happen.
+    case EVENT.ADMIN_ACTION: {
+      world.adminLog.push({
+        seq: e.seq,
+        at: e.at,
+        actor: e.actor,
+        action: e.action,
+        detail: e.detail ?? null,
+      })
       break
     }
     default:
