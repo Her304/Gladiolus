@@ -156,7 +156,7 @@ export function routeFeasibility(route) {
  *
  * @returns {{verdict:FeasibilityVerdict, blockers:string[], confidence?:number, inputs:string[]}}
  */
-export function assignmentFeasibility({ duty, vehicle, route, equipment, weight, assignment, now = Date.now() }) {
+export function assignmentFeasibility({ duty, vehicle, route, equipment, weight, assignment, now }) {
   const blockers = []
   const inputs = []
   let unresolved = false

@@ -69,11 +69,12 @@ export function createIngestionHealth() {
   const providers = new Map() // providerId → { lastAt, status, consecutiveFailures }
 
   function recordSuccess(providerId, source = 'live') {
+    const recordedAt = Date.now()
     stats.received++
     stats.applied++
-    stats.lastSuccessAt = Date.now()
+    stats.lastSuccessAt = recordedAt
     stats.lastSource = source
-    providers.set(providerId, { lastAt: Date.now(), status: 'ok', consecutiveFailures: 0 })
+    providers.set(providerId, { lastAt: recordedAt, status: 'ok', consecutiveFailures: 0 })
   }
 
   function recordDuplicate(providerId) {
@@ -110,7 +111,9 @@ export function createIngestionHealth() {
   /** Data age for a provider's last successful observation. */
   function dataAgeMs(providerId, now = Date.now()) {
     const p = providers.get(providerId)
-    return p?.lastAt ? now - p.lastAt : null
+    // A caller may supply a clock that trails an observation clock. Keep a
+    // known observation visibly fresh instead of exposing a negative age.
+    return p?.lastAt ? Math.max(1, now - p.lastAt) : null
   }
 
   function health() {

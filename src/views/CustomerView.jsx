@@ -141,18 +141,13 @@ export default function CustomerView({ token }) {
           <div className="cp-map-empty" />
         )}
 
-        <div className="cp-route-header">
-          <h1>{dest?.name ?? 'Destination to be confirmed'}</h1>
-          <p>
-            {completed
-              ? 'Shipment delivered'
-              : `${etaKm} · Arriving ${etaTime}`}
-          </p>
-        </div>
-
         <div className="cp-main">
           <div className="cp-island">
             <section className={`dp-card dp-content ${completed ? 'cp-delivered' : ''}`}>
+              <div className="cp-location">
+                <h1>{dest?.name ?? 'Destination to be confirmed'}</h1>
+              </div>
+
               <div className="dp-identity">
                 <span className={`dp-symbol ${completed ? 'ok' : ''}`}>
                   <Icon name={completed ? 'check' : 'truck'} />
@@ -164,18 +159,7 @@ export default function CustomerView({ token }) {
                 <span className={`dp-pill ${completed ? 'ok' : stopped ? 'warn' : ''}`}>{status}</span>
               </div>
 
-              {completed ? (
-                <div className="dp-stats">
-                  <span>
-                    <b>Delivered</b>
-                    Status
-                  </span>
-                  <span>
-                    <b>{dest ? dest.name : '—'}</b>
-                    Destination
-                  </span>
-                </div>
-              ) : (
+              {!completed && (
                 <div className="dp-stats">
                   <span>
                     <b>{etaTime}</b>
@@ -187,12 +171,6 @@ export default function CustomerView({ token }) {
                   </span>
                 </div>
               )}
-
-              <p className="dp-info">
-                {completed
-                  ? `This shipment has been delivered${dest ? ` to ${dest.name}` : ''}. No further tracking updates will follow.`
-                  : `Estimated arrival ${etaTime}, ${etaKm} remaining. ETA updates as conditions change.`}
-              </p>
 
               {/*
                 The customer reaches dispatch two ways: a phone call and a text
