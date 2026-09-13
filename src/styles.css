@@ -435,9 +435,13 @@ tr.alarm td { background: rgba(255, 107, 94, 0.1); }
 .leaflet-control-attribution a { color: var(--muted) !important; }
 
 .truck-icon div {
-  width: 11px; height: 11px;
-  border-radius: 2px;
-  border: 1px solid rgba(0,0,0,0.55);
+  width: 24px; height: 24px;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
 }
 .map-legend {
   position: absolute; z-index: 500; left: 12px; bottom: 22px;

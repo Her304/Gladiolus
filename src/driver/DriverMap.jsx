@@ -4,6 +4,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { roadPosition, routePoints } from './model.js'
 import { roadRoute } from '../services/routing.js'
+import carIcon from '../assets/directions-car.svg'
 
 function Camera({ truck, target, recenter, viewMode, collapsed }) {
   const map = useMap()
@@ -60,7 +61,7 @@ export default function DriverMap({ truck, target, recenter, viewMode = 'overvie
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeKey, target?.coord?.[0], target?.coord?.[1]])
   const points = roadPoints || fallbackPoints
-  const arrow = useMemo(() => L.divIcon({ className: 'dp-truck-marker', iconSize: [40, 40], iconAnchor: [20, 20], html: `<span style="transform:rotate(${truck.heading || 0}deg)">↑</span>` }), [truck.heading])
+  const arrow = useMemo(() => L.divIcon({ className: 'dp-truck-marker', iconSize: [40, 40], iconAnchor: [20, 20], html: `<img class="dp-truck-navigation-icon" src="${carIcon}" alt="" />` }), [])
   const glyph = { parking: 'P', scale: 'S', incident: '!' }[target?.kind] || '●'
   const stop = useMemo(() => L.divIcon({ className: `dp-stop-marker ${target?.kind || ''}`, iconSize: [28, 28], html: glyph }), [target?.kind, glyph])
   // The "ahead" family of screens shows every parking site and inspection

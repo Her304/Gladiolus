@@ -8,6 +8,7 @@ import { hosStatus, clockLeftMs, fmtClock } from '../engine/hos.js'
 import { HOS_COLOUR, LEVEL_COLOUR, fmtTime } from '../format.js'
 import { haversine } from '../engine/geo.js'
 import { breadcrumbHistory } from '../domain/history.js'
+import truckMarkerSvg from '../assets/local_shipping_24dp_1F1F1F_FILL0_wght400_GRAD0_opsz24.svg'
 
 const NODE_BY_ID = new Map(NODES.map((node) => [node.id, node]))
 const SITE_NODE_BY_ID = new Map(SITES.map((site) => {
@@ -67,9 +68,9 @@ function truckIcon(colour, heading, dimmed) {
   if (TRUCK_ICON_CACHE.has(key)) return TRUCK_ICON_CACHE.get(key)
   const icon = L.divIcon({
     className: 'truck-icon',
-    iconSize: [11, 11],
-    iconAnchor: [6, 6],
-    html: `<div style="background:${colour};opacity:${dimmed ? 0.45 : 1};transform:rotate(${roundedHeading}deg)"></div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+    html: `<div style="background:${colour};opacity:${dimmed ? 0.45 : 1};transform:rotate(${roundedHeading}deg);mask-image:url('${truckMarkerSvg}');-webkit-mask-image:url('${truckMarkerSvg}')"></div>`,
   })
   TRUCK_ICON_CACHE.set(key, icon)
   return icon

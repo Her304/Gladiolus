@@ -136,10 +136,10 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
     if (token) {
       const url = `${window.location.origin}${window.location.pathname}#/t/${token}`
       setLinkUrl(url)
-      setMessage(`Customer link ready for ${truck.shipmentId}.`)
+      setMessage(`Client link ready for ${truck.shipmentId}.`)
     } else {
       setLinkUrl(null)
-      setMessage('Could not mint a customer link — the server may be unavailable.')
+      setMessage('Could not mint a client link — the server may be unavailable.')
     }
   }
 
@@ -190,7 +190,7 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
               valid after delivery. */}
           <div className="task-section">
             <span className="task-label">
-              Customer portal{truck.shipmentId ? ` · ${truck.shipmentId}` : ''}
+              Client portal{truck.shipmentId ? ` · ${truck.shipmentId}` : ''}
             </span>
             {!linkUrl ? (
               <button
@@ -199,7 +199,7 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
                 onClick={openCustomerLink}
                 title={truck.shipmentId ? 'Mint a shipment-scoped tracking link to copy and send' : 'No shipment linked to this task yet'}
               >
-                {linkBusy ? 'Minting…' : truck.shipmentId ? 'Get customer link' : 'No shipment linked'}
+                {linkBusy ? 'Minting…' : truck.shipmentId ? 'Get client link' : 'No shipment linked'}
               </button>
             ) : (
               <div className="task-link-row">
@@ -209,7 +209,7 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
                   value={linkUrl}
                   readOnly
                   onFocus={(e) => e.target.select()}
-                  aria-label="Customer tracking link"
+                  aria-label="Client tracking link"
                 />
                 <button
                   className="ghost task-link-btn"
@@ -223,7 +223,7 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
                   href={linkUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  title="Open the customer portal in a new tab"
+                  title="Open the client portal in a new tab"
                 >
                   Open
                 </a>

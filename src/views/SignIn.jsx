@@ -77,7 +77,7 @@ export default function SignIn() {
 
       <div className="banner" style={{ marginTop: 20 }}>
         <strong>Server-enforced access.</strong> Passwords are hashed at rest;
-        customer tracking links are signed, expiring, revocable, and scoped to
+        client tracking links are signed, expiring, revocable, and scoped to
         one shipment.
       </div>
     </div>
