@@ -1,5 +1,6 @@
 import { EVENT } from '../contract.js'
 import { SITE_BY_ID } from '../data/corridor.js'
+import { fmtTime } from '../format.js'
 
 /**
  * Dashboard metrics, all folds over the same log. Adding one of these never
@@ -55,9 +56,7 @@ export function kmOverTime(events, { bucketMin = 15, maxBuckets = 48 } = {}) {
     .slice(-maxBuckets)
     .map((b) => ({
       ...b,
-      label: new Date(b.slot).toLocaleTimeString('en-CA', {
-        hour: '2-digit', minute: '2-digit', hour12: false,
-      }),
+      label: fmtTime(b.slot),
       laden: Math.round(b.laden),
       empty: Math.round(b.empty),
     }))

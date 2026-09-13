@@ -29,7 +29,7 @@ export default function SignIn() {
 
   return (
     <div className="page page-narrow">
-      <a href="#/driver" className="ghost" style={{ display: 'block', marginBottom: 20 }}>Open the new driver portal →</a>
+      <a href="#/driver-demo/today" className="ghost" style={{ display: 'block', marginBottom: 20 }}>Try the loading / unloading driver simulation →</a>
       <div className="tabs">
         <button aria-pressed={tab === 'dispatch'} onClick={() => { setTab('dispatch'); setError(null) }}>
           Dispatch

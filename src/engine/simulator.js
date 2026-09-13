@@ -1,5 +1,5 @@
 import {
-  CORRIDOR, SITE_BY_ID, STOP_SITES, PARKING_SITES, MIN_FENCE_M,
+  CORRIDOR, ROAD_CORRIDOR, SITE_BY_ID, STOP_SITES, PARKING_SITES, MIN_FENCE_M,
 } from '../data/corridor.js'
 import { positionAt, headingAt } from './geo.js'
 import { transition } from './geofence.js'
@@ -20,6 +20,7 @@ import { gateMovement, rankCandidates } from '../domain/command.js'
 import { calculateDetention, foldVisit } from '../domain/detention.js'
 import { createLoadBoard, createLoad } from '../domain/loadboard.js'
 import { boundedReach } from '../domain/feasibility.js'
+import { torontoTimeAtHour } from '../format.js'
 
 /** Sim time between telemetry pings per truck. 40 trucks pinging every tick is
  *  unusable; once every 90 sim seconds keeps the log a manageable size. */
@@ -42,18 +43,22 @@ const MAX_SUBSTEP_KM = MIN_FENCE_M / 2600
  * is the point — it is why the log stays an honest telemetry record rather than
  * a mirror of application state.
  */
-export function createSimulator(store, { startHour = 14 } = {}) {
+export function createSimulator(store, { startHour, startAt = Date.now() } = {}) {
   const rnd = mulberry32(915234)
   const { trucks: seeded } = seedFleet()
   const trucks = new Map(seeded.map((t) => [t.id, { ...t }]))
 
-  const start = new Date()
-  start.setHours(startHour, 0, 0, 0)
-
-  let clock = start.getTime()
+  // Production telemetry should read as "now" when the service boots.  Keep
+  // startHour as an explicit test/demo override, but never quietly pin normal
+  // runs to 14:00.
+  const initialAt = new Date(startAt).getTime()
+  let clock = Number.isFinite(startHour) ? torontoTimeAtHour(initialAt, startHour) : initialAt
+  // Provider IDs must be unique across server restarts. Without a session key,
+  // every bootstrap ping reused tick 0 and durable ingestion discarded it.
+  const sessionId = `sim-${clock.toString(36)}-${Math.floor(rnd() * 1e9).toString(36)}`
   let incidents = []
   let flow = []
-  let speedMultiplier = 30 // sim seconds per real second
+  let speedMultiplier = 1 // real-time by default; higher values are an explicit demo choice
 
   // A shared open-load queue. Trucks no longer invent freight or self-assign
   // after a dwell (assessment §8: "Load generation is not load matching"); they
@@ -185,7 +190,19 @@ export function createSimulator(store, { startHour = 14 } = {}) {
    * puts it inside the geofence. Without this, every fence is unreachable and
    * none of them ever fire.
    */
-  function pos(t) {
+  /** Exact location along the bundled 401 route. This is the coordinate sent
+   * to map clients while a truck is moving. */
+  function roadPos(t) {
+    return positionAt(ROAD_CORRIDOR, t.chainage / CORRIDOR.length * ROAD_CORRIDOR.length)
+  }
+
+  /** Internal approach coordinate used only to detect an arrival at a
+   * facility whose gate is set back from the highway. It must not be emitted
+   * as live vehicle telemetry: interpolating toward a site can draw a truck
+   * through water or across blocks on the board map. */
+  function approachPos(t) {
+    // Keep arrival and parking calculations on their existing deterministic
+    // reference spine. Only map-facing telemetry uses the detailed road trace.
     const base = positionAt(CORRIDOR, t.chainage)
     const site = intendedSite(t)
     if (!site) return base
@@ -197,6 +214,14 @@ export function createSimulator(store, { startHour = 14 } = {}) {
     ]
   }
 
+  function pos(t) {
+    // Once a truck has reached a facility, its known gate/fence coordinate is
+    // more accurate than the highway centreline. Everywhere else it stays on
+    // the road-snapped trace.
+    if (t.insideSiteId && SITE_BY_ID[t.insideSiteId]) return SITE_BY_ID[t.insideSiteId].coord
+    return roadPos(t)
+  }
+
   function observable(t) {
     return {
       id: t.id,
@@ -204,7 +229,7 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       driverId: t.driverId,
       driverName: t.driverName,
       coord: pos(t),
-      heading: headingAt(CORRIDOR, t.chainage),
+      heading: headingAt(ROAD_CORRIDOR, t.chainage / CORRIDOR.length * ROAD_CORRIDOR.length),
       chainage: t.chainage,
       direction: t.direction,
       speedKph: Math.round(t.speedKph),
@@ -305,7 +330,7 @@ export function createSimulator(store, { startHour = 14 } = {}) {
   }
 
   function handleFences(t) {
-    const tr = transition(t.insideSiteId, pos(t))
+    const tr = transition(t.insideSiteId, approachPos(t))
 
     if (tr.kind === 'enter') {
       t.insideSiteId = tr.site.id
@@ -603,6 +628,10 @@ export function createSimulator(store, { startHour = 14 } = {}) {
   return {
     /** Emit a first ping for every truck so the map is populated on frame one. */
     bootstrap() {
+      // A persistent dev log may contain an earlier accelerated session whose
+      // timestamps are ahead of wall time. Clear that synthetic projection
+      // before publishing this session's real-time telemetry.
+      store.append(EVENT.SIMULATION_RESET, clock, { sessionId })
       for (const t of trucks.values()) emitPing(t)
       store.commit()
     },
@@ -629,6 +658,7 @@ export function createSimulator(store, { startHour = 14 } = {}) {
     setSpeed: (n) => { speedMultiplier = Math.max(1, Math.min(240, n)) },
     getSpeed: () => speedMultiplier,
     getClock: () => clock,
+    getSessionId: () => sessionId,
     getTruck: (id) => trucks.get(id),
     /** Driver choices update the physical model and emit the same events as automation. */
     driverParking(truckId, siteId) {

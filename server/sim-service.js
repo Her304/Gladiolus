@@ -20,10 +20,10 @@ const TICK_MS = 500
 /**
  * @param {object} opts
  * @param {function} opts.ingest  ingestion sink (server.ingester.ingest or a test stub)
- * @param {number} [opts.startHour]
+ * @param {number} [opts.startHour] explicit test/demo clock override
  * @param {number} [opts.speed]
  */
-export function createSimService({ ingest, startHour = 14, speed = 30, onTick } = {}) {
+export function createSimService({ ingest, startHour, speed = 1, onTick } = {}) {
   if (typeof ingest !== 'function') throw new Error('createSimService requires an ingest sink')
   // An internal store the simulator writes to; we tee each appended event into
   // the ingestion sink so the durable log and the sim's own fold stay aligned.
@@ -60,8 +60,9 @@ export function createSimService({ ingest, startHour = 14, speed = 30, onTick } 
   }
 
   function simProviderId(type, p) {
-    if (p.truckId) return `sim:${type}:${p.truckId}:${tickCount}`
-    return `sim:${type}:${tickCount}`
+    const sessionId = sim.getSessionId()
+    if (p.truckId) return `${sessionId}:${type}:${p.truckId}:${tickCount}`
+    return `${sessionId}:${type}:${tickCount}`
   }
 
   function tick() {

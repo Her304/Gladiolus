@@ -20,8 +20,9 @@ const MIN = 60_000
  * @param {object} props
  * @param {object} props.truck    the driver's truck (for HOS)
  * @param {string} [props.stopId] the active delivery stop id (optional)
+ * @param {'loading'|'unloading'} [props.operation] the dock operation
  */
-export default function ShipmentVisit({ truck, stopId }) {
+export default function ShipmentVisit({ truck, stopId, operation }) {
   const events = useEvents()
 
   // Fold the active visit from stop-milestone events for this stop (or the
@@ -66,7 +67,7 @@ export default function ShipmentVisit({ truck, stopId }) {
 
       <div className="visit-milestone">
         <span className="milestone-label">Milestone</span>
-        <span className={`milestone m-${visit.milestone}`}>{label(visit.milestone)}</span>
+        <span className={`milestone m-${visit.milestone}`}>{label(visit.milestone, operation)}</span>
       </div>
 
       <div className="visit-times">
@@ -94,7 +95,7 @@ export default function ShipmentVisit({ truck, stopId }) {
 
       <div className="visit-action">
         <span className="t-label">Requested action</span>
-        <span className="t-value">{requestedAction(visit, safetyFirst)}</span>
+        <span className="t-value">{requestedAction(visit, safetyFirst, operation)}</span>
       </div>
 
       <div className="visit-ack">
@@ -105,21 +106,21 @@ export default function ShipmentVisit({ truck, stopId }) {
   )
 }
 
-function label(m) {
+function label(m, operation) {
   return ({
     none: 'Not arrived',
     arrived: 'Arrived',
     checked_in: 'Checked in',
-    service_started: 'Service in progress',
-    service_completed: 'Service complete',
+    service_started: operation ? `${operation[0].toUpperCase()}${operation.slice(1)} in progress` : 'Service in progress',
+    service_completed: operation ? `${operation[0].toUpperCase()}${operation.slice(1)} complete` : 'Service complete',
     departed: 'Departed',
   })[m] || m
 }
 
-function requestedAction(visit, safetyFirst) {
+function requestedAction(visit, safetyFirst, operation) {
   if (safetyFirst) return 'Hold for safe-stop / onsite-rest resolution'
   if (visit.milestone === 'service_completed') return 'Confirm departure and gate-out'
-  if (visit.milestone === 'service_started') return 'Complete service'
+  if (visit.milestone === 'service_started') return operation ? `Confirm ${operation} complete` : 'Complete service'
   if (visit.milestone === 'arrived') return 'Check in at the dock'
   return 'Proceed to stop'
 }

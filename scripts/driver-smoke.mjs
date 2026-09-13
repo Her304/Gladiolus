@@ -39,6 +39,22 @@ assert.equal(d.store.getWorld().sites['onr-trafalgar'].claims.length,0)
 assert.equal(d.act('delay.reported', {message:'   '}).ok,false)
 assert(d.act('delay.reported', {message:'Waiting at gate',reason:'Waiting for a dock'}).ok)
 assert.equal(driverActions(d.store.events,DEMO_ID).at(-1).message,'Waiting at gate')
+
+// Facility scenes are a usable driver workflow, not a static dock mock:
+// pickup loads the trailer and delivery unloads it, with each confirmation
+// recorded as an independent stop milestone.
+d.setScene('loading')
+assert.equal(truck().laden, false)
+assert.equal(d.store.getWorld().stops['london-dc'].milestone, 'arrived')
+for (const action of ['checkInStop', 'startService', 'completeService']) assert(d.advanceVisit(action).ok)
+assert.equal(truck().laden, true)
+assert(d.advanceVisit('departStop').ok)
+d.setScene('unloading')
+assert.equal(truck().laden, true)
+assert.equal(d.store.getWorld().stops['cambridge-dc'].milestone, 'arrived')
+for (const action of ['checkInStop', 'startService', 'completeService']) assert(d.advanceVisit(action).ok)
+assert.equal(truck().laden, false)
+assert(d.advanceVisit('departStop').ok)
 assert.deepEqual(rebuild(d.store.events),d.store.getWorld())
 const live = createStore(), sim = createSimulator(live)
 sim.bootstrap()

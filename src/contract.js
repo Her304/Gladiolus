@@ -9,6 +9,9 @@
  */
 
 export const EVENT = {
+  // Starts a new synthetic telemetry session. This prevents an old accelerated
+  // demo run from bleeding into a fresh real-time run after a server restart.
+  SIMULATION_RESET: 'simulation.reset',
   PING: 'truck.ping',
   FENCE_ENTER: 'fence.enter',
   FENCE_EXIT: 'fence.exit',

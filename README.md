@@ -27,6 +27,11 @@ Demo accounts:
 Passwords and PINs are seeded only on the server and stored as scrypt hashes.
 They are not included in the production browser bundle.
 
+To try the guided driver workflow without changing the shared fleet, open
+`#/driver-demo/today` and choose **Loading at pickup** or **Unloading at
+delivery**. The driver confirms check-in, loading/unloading, and gate-out; the
+simulated trailer state changes only when those milestone events are confirmed.
+
 ## Product surfaces
 
 | Surface | Route | Access |

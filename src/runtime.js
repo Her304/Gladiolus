@@ -19,7 +19,7 @@ export const SERVER_URL = SERVER_ENABLED ? (SERVER_BASE || globalThis.location?.
 // bundle. The facade also accepts feed updates while the local-only simulator
 // chunk is still loading.
 let simulator = null
-let requestedSpeed = 30
+let requestedSpeed = 1
 let pendingIncidents = []
 let pendingFlow = []
 export const sim = {
@@ -59,7 +59,7 @@ export async function startRuntime() {
   // Dev/demo: load the physical model only when this browser is actually the
   // data source. Server-backed clients never download or parse this chunk.
   const { createSimulator } = await import('./engine/simulator.js')
-  simulator = createSimulator(store, { startHour: 14 })
+  simulator = createSimulator(store)
   simulator.setSpeed(requestedSpeed)
   simulator.setIncidents(pendingIncidents)
   simulator.setFlow(pendingFlow)

@@ -1,5 +1,6 @@
 import { createStore } from '../engine/events.js'
 import { EVENT } from '../contract.js'
+import { EVENT as SHIPMENT_EVENT } from '../domain/contract.js'
 import { SITE_BY_ID, CORRIDOR } from '../data/corridor.js'
 import { HIGHWAY_401_ROUTE } from '../data/highway401-route.js'
 import { positionAt, headingAt, haversine, chainageOf, measurePath } from '../engine/geo.js'
@@ -9,7 +10,16 @@ const ROAD_CORRIDOR = measurePath(HIGHWAY_401_ROUTE)
 
 export const DRIVER_EVENT = 'driver.action'
 export const DEMO_ID = 'GLD-118'
-export const SCENES = { rolling: 'On the road', offer: 'New load offer', dock: 'At the dock', critical: 'Time to rest', resting: 'Resting', inspection: 'Start of shift', breakdown: 'Truck won’t move' }
+export const SCENES = {
+  rolling: 'On the road',
+  offer: 'New load offer',
+  loading: 'Loading at pickup',
+  unloading: 'Unloading at delivery',
+  critical: 'Time to rest',
+  resting: 'Resting',
+  inspection: 'Start of shift',
+  breakdown: 'Truck won’t move',
+}
 export function driverActions(events, truckId) { return events.filter(e => e.type === DRIVER_EVENT && e.truckId === truckId) }
 export function recordAction(store, truckId, action, detail = {}) {
   store.append(DRIVER_EVENT, store.getWorld().clock, { truckId, action, ...detail })
@@ -121,9 +131,10 @@ export function createDriverDemo() {
     if (!SCENES[next]) return
     scene = next
     store.reset()
-    const clock = new Date(2026, 8, 7, next === 'dock' ? 8 : next === 'critical' ? 19 : next === 'inspection' ? 5 : 13, next === 'dock' ? 28 : 5).getTime()
+    const atFacility = ['loading', 'unloading'].includes(next)
+    const clock = new Date(2026, 8, 7, atFacility ? 8 : next === 'critical' ? 19 : next === 'inspection' ? 5 : 13, atFacility ? 28 : 5).getTime()
     const chainage = next === 'critical' ? SITE_BY_ID['onr-trafalgar'].chainage - 18 : SITE_BY_ID['cambridge-dc'].chainage - 28
-    const parked = ['offer', 'dock', 'resting', 'inspection', 'breakdown'].includes(next)
+    const parked = ['offer', 'loading', 'unloading', 'resting', 'inspection', 'breakdown'].includes(next)
     const truck = { id: DEMO_ID, driverId: 'D-118', driverName: 'Priya Raman', plate: 'ON BJ 4821', chainage,
       coord: positionAt(CORRIDOR, chainage), heading: headingAt(CORRIDOR, chainage), direction: 1,
       speedKph: parked ? 0 : 82, odometerKm: 124412, state: parked ? next === 'resting' ? 'resting' : 'dwelling' : 'driving', parked: parked && next !== 'breakdown',
@@ -132,14 +143,55 @@ export function createDriverDemo() {
       loadId: next === 'offer' ? null : 'MG-4482', laden: next !== 'offer', destinationId: next === 'critical' ? 'milton-intermodal' : 'cambridge-dc',
       insideSiteId: null, claimedSiteId: null, enteredAt: null }
     if (next === 'offer') Object.assign(truck, { coord: SITE_BY_ID['london-dc'].coord, chainage: SITE_BY_ID['london-dc'].chainage })
-    if (next === 'dock') {
-      Object.assign(truck, { coord: SITE_BY_ID['london-dc'].coord, chainage: SITE_BY_ID['london-dc'].chainage, insideSiteId: 'london-dc', enteredAt: clock - 8 * 60000, onDutyMs: 68 * 60000, elapsedMs: 68 * 60000, drivingMs: 0 })
+    if (atFacility) {
+      const facilityId = next === 'loading' ? 'london-dc' : 'cambridge-dc'
+      Object.assign(truck, {
+        coord: SITE_BY_ID[facilityId].coord,
+        chainage: SITE_BY_ID[facilityId].chainage,
+        insideSiteId: facilityId,
+        enteredAt: clock - 8 * 60000,
+        onDutyMs: 68 * 60000,
+        elapsedMs: 68 * 60000,
+        drivingMs: 0,
+        shipmentId: 'SHP-MG-4482',
+        destinationId: next === 'loading' ? 'cambridge-dc' : 'cambridge-dc',
+        laden: next === 'unloading',
+      })
     }
     if (next === 'resting') Object.assign(truck, { insideSiteId: 'onr-cambridge', coord: SITE_BY_ID['onr-cambridge'].coord, chainage: SITE_BY_ID['onr-cambridge'].chainage, enteredAt: clock - H })
     // Start of shift: in the yard, clocks fresh, and deliberately with no
     // inspection on file — that is the one scene where the portal should be
     // asking for one.
     if (next === 'inspection') Object.assign(truck, { insideSiteId: 'yard-windsor', coord: SITE_BY_ID['yard-windsor'].coord, chainage: SITE_BY_ID['yard-windsor'].chainage, enteredAt: clock - 25 * 60000, loadId: null, laden: false, destinationId: 'chatham-pt' })
+    // The driver demo follows the exact independent stop-milestone model used
+    // by the shared server. Arrival is merely evidence of presence; loading or
+    // unloading only starts after the driver explicitly confirms it.
+    if (atFacility) {
+      const stopId = truck.insideSiteId
+      store.append(SHIPMENT_EVENT.SHIPMENT_POSTED, clock - 10 * 60000, {
+        shipmentId: truck.shipmentId,
+        loadId: truck.loadId,
+        stops: ['london-dc', 'cambridge-dc'],
+        originId: 'london-dc',
+        destinationId: 'cambridge-dc',
+      })
+      store.append(SHIPMENT_EVENT.ASSIGNMENT_COMMITTED, clock - 9 * 60000, {
+        shipmentId: truck.shipmentId,
+        loadId: truck.loadId,
+        truckId: DEMO_ID,
+        driverId: truck.driverId,
+        assignmentId: 'ASN-MG-4482',
+      })
+      store.append(SHIPMENT_EVENT.STOP_ARRIVED, clock - 8 * 60000, {
+        shipmentId: truck.shipmentId,
+        stopId,
+        truckId: DEMO_ID,
+        facilityId: stopId,
+        source: 'simulated',
+      })
+    }
+    // The latest simulated observation is deliberately appended after the
+    // historical visit setup, so event sequence and observed time agree.
     store.append(EVENT.PING, clock, { truckId: DEMO_ID, truck })
     // Every other scene is mid-shift, so the morning's inspection is already on
     // file. Without it the portal would open on a prompt in scenes that are
@@ -197,8 +249,48 @@ export function createDriverDemo() {
     recordAction(store, DEMO_ID, action, detail)
     return { ok: true }
   }
+  function advanceVisit(command) {
+    const w = store.getWorld(), t = w.trucks[DEMO_ID]
+    const shipmentId = t?.shipmentId, stopId = t?.insideSiteId
+    const eventType = {
+      checkInStop: SHIPMENT_EVENT.STOP_CHECKED_IN,
+      startService: SHIPMENT_EVENT.STOP_SERVICE_STARTED,
+      completeService: SHIPMENT_EVENT.STOP_SERVICE_COMPLETED,
+      departStop: SHIPMENT_EVENT.STOP_DEPARTED,
+    }[command]
+    if (!eventType || !shipmentId || !stopId) return { ok: false, error: 'No active loading or unloading visit.' }
+
+    const milestone = w.stops[stopId]?.milestone || 'none'
+    const predecessor = {
+      checkInStop: 'arrived', startService: 'checked_in',
+      completeService: 'service_started', departStop: 'service_completed',
+    }[command]
+    if (milestone !== predecessor) return { ok: false, error: `Cannot update this stop from ${milestone.replaceAll('_', ' ')}.` }
+
+    store.append(eventType, w.clock, {
+      shipmentId, stopId, truckId: DEMO_ID, facilityId: stopId,
+      source: 'driver-confirmed',
+    })
+    if (command === 'completeService') {
+      // Pickup completion puts freight on the trailer; delivery completion
+      // removes it. This is a simulated truck observation, not UI-only state.
+      const loading = stopId === 'london-dc'
+      store.append(EVENT.PING, w.clock, { truckId: DEMO_ID, truck: { ...t, laden: loading } })
+    }
+    if (command === 'departStop') {
+      store.append(EVENT.PING, w.clock, { truckId: DEMO_ID, truck: {
+        ...t, insideSiteId: null, enteredAt: null, state: 'driving', parked: false,
+        speedKph: 82,
+        loadId: stopId === 'cambridge-dc' ? null : t.loadId,
+        shipmentId: stopId === 'cambridge-dc' ? null : t.shipmentId,
+      } })
+      if (stopId === 'cambridge-dc') store.append(SHIPMENT_EVENT.SHIPMENT_COMPLETED, w.clock, { shipmentId, truckId: DEMO_ID })
+    }
+    store.commit()
+    return { ok: true, milestone: { checkInStop: 'checked_in', startService: 'service_started', completeService: 'service_completed', departStop: 'departed' }[command] }
+  }
   setScene('rolling')
-  return { store, setScene, getScene: () => scene, act, tick() {
+  return { store, setScene, getScene: () => scene, act, advanceVisit, tick() {
     const w = store.getWorld(), t = w.trucks[DEMO_ID], dt = 1000
     const driving = t.state === 'driving'
     const chainage = Math.min(CORRIDOR.length, t.chainage + (driving ? t.speedKph / 3600 : 0))

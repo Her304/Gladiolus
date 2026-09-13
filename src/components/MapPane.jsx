@@ -2,49 +2,27 @@ import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, TileLayer, Polyline, Circle, Marker, Tooltip, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { CORRIDOR_POINTS, SITES, SITE_BY_ID } from '../data/corridor.js'
-import { NODES, EDGES, shortestPath } from '../data/regional-graph.js'
+import { CORRIDOR_POINTS, SITES } from '../data/corridor.js'
+import { NODES } from '../data/regional-graph.js'
 import { hosStatus, clockLeftMs, fmtClock } from '../engine/hos.js'
 import { HOS_COLOUR, LEVEL_COLOUR, fmtTime } from '../format.js'
-import { haversine } from '../engine/geo.js'
 import { breadcrumbHistory } from '../domain/history.js'
+import { routePoints } from '../driver/model.js'
 import truckMarkerSvg from '../assets/local_shipping_24dp_1F1F1F_FILL0_wght400_GRAD0_opsz24.svg'
 
-const NODE_BY_ID = new Map(NODES.map((node) => [node.id, node]))
-const SITE_NODE_BY_ID = new Map(SITES.map((site) => {
-  let best = null, bestD = Infinity
-  for (const node of NODES) {
-    const distance = haversine(site.coord, node.coord)
-    if (distance < bestD) { bestD = distance; best = node }
-  }
-  return [site.id, best]
-}))
-const GRAPH_SEGMENTS = EDGES.map((edge, index) => ({
-  key: `rg-${index}`,
-  positions: [NODE_BY_ID.get(edge.from)?.coord, NODE_BY_ID.get(edge.to)?.coord].filter(Boolean),
-})).filter((segment) => segment.positions.length === 2)
-const ROUTE_CACHE = new Map()
+const DESTINATION_BY_ID = new Map([
+  ...SITES.map((site) => [site.id, site]),
+  ...NODES.map((node) => [node.id, node]),
+])
 
-/** The graph path for a truck's active load: from its current node to its
- *  destination's node, as a polyline of node coordinates. */
+/** Use the same bundled road trace as DriverMap. The old dispatcher-only graph
+ * linked regional nodes with straight lines, which visually sent trucks across
+ * the lake even though their driver map showed the 401. */
 function truckRoutePath(truck) {
   if (!truck?.loadId || !truck?.destinationId) return null
-  const destNode = SITE_NODE_BY_ID.get(truck.destinationId)
-  // The truck's current node: nearest to its current position.
-  let curNode = null, curD = Infinity
-  for (const n of NODES) {
-    const d = haversine(truck.coord, n.coord)
-    if (d < curD) { curD = d; curNode = n }
-  }
-  if (!curNode || !destNode || curNode.id === destNode.id) return null
-  const key = `${curNode.id}:${destNode.id}`
-  let path = ROUTE_CACHE.get(key)
-  if (!path) {
-    path = shortestPath(curNode.id, destNode.id)
-    ROUTE_CACHE.set(key, path)
-  }
-  if (!path || path.path.length < 2) return null
-  return path.path.map((id) => NODE_BY_ID.get(id)?.coord).filter(Boolean)
+  const destination = DESTINATION_BY_ID.get(truck.destinationId)
+  if (!destination) return null
+  return routePoints(truck, destination)
 }
 
 /**
@@ -124,18 +102,8 @@ export default function MapPane({ world, pings = [], incidents = [], board = [],
           <Polyline positions={trace.points.map((p) => p.coord)} pathOptions={{ color: '#ffb020', weight: 5, opacity: 0.9 }} />
         )}
 
-        {/* Regional road graph (Phase 5): the branches to Barrie, Peterborough,
-            Pickering, and Niagara Falls via 401/403/400/QEW. So panning off the
-            401 spine shows real routes, not empty map. */}
-        {GRAPH_SEGMENTS.map((segment) => (
-          <Polyline key={segment.key} positions={segment.positions} pathOptions={{ color: '#3a6f9e', weight: 1.5, opacity: 0.35, dashArray: '4 4' }} />
-        ))}
-
-        {/* Active load routes: for each laden truck, highlight its graph path
-            (origin node → destination node) as a solid line so a judge can see
-            the truck routing across the real road network. When a task card is
-            expanded, only that driver's route is drawn — the rest of the fleet
-            fades out of the centre pane. */}
+        {/* Active load routes share DriverMap's road-snapped fallback, so the
+            dispatcher, customer and driver all see the same route geometry. */}
         {trucks
           .filter((t) => t.laden && t.loadId && (!isolating || t.id === isolating.id))
           .map((t) => {

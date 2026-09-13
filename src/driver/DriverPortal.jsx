@@ -15,10 +15,11 @@ import DriverMap from './DriverMap.jsx'
 import ShipmentVisit from './ShipmentVisit.jsx'
 import { issueCommand } from '../services/serverApi.js'
 import { SERVER_ENABLED } from '../services/serverConfig.js'
+import { fmtDate, fmtTime } from '../format.js'
 import './driver.css'
 
-const time = n => new Date(n).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit', hour12: false })
-const date = n => new Date(n).toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })
+const time = fmtTime
+const date = fmtDate
 const initials = s => s?.split(' ').map(x => x[0]).slice(0, 2).join('') || 'DR'
 function Icon({ name, ...props }) {
   const paths = { today: 'M3 10 12 3l9 7v11h-6v-7H9v7H3Z', log: 'M4 5h16M4 12h16M4 19h11', parking: 'M6 21V3h7a6 6 0 0 1 0 12H6', me: 'M20 21a8 8 0 0 0-16 0M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8', back: 'm14 5-7 7 7 7', arrow: 'm9 5 7 7-7 7', locate: 'M12 2v4M12 18v4M2 12h4M18 12h4M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10', overview: 'M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3M8 12h8', navigate: 'm12 3 7 18-7-4-7 4Z', check: 'm4 12 5 5L20 6', bell: 'M5 17h14l-2-3V9a5 5 0 0 0-10 0v5ZM10 21h4', truck: 'M2 6h12v12H2ZM14 10h5l3 5v3h-8M5 18v3M18 18v3', help: 'M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 4M12 18v1', close: 'm6 6 12 12M6 18 18 6',
@@ -254,11 +255,14 @@ export default function DriverPortal({ demoController, incidents = INITIAL_INCID
   const activeAssignment = events.findLast((e) => e.type === 'assignment.committed' && e.truckId === truckId)
   const activeShipmentId = truck.shipmentId || activeAssignment?.shipmentId
   const activeStopId = dock?.id
+  const dockOperation = truck.laden ? 'unloading' : 'loading'
   const visitMilestone = activeShipmentId && activeStopId
     ? events.filter((e) => e.shipmentId === activeShipmentId && e.stopId === activeStopId && e.type.startsWith('stop.')).at(-1)?.type
     : null
   async function advanceVisit(type) {
-    const result = await issueCommand({ type, shipmentId: activeShipmentId, stopId: activeStopId, idempotencyKey: `${type}-${activeShipmentId}-${activeStopId}` })
+    const result = demo
+      ? demoController.advanceVisit(type)
+      : await issueCommand({ type, shipmentId: activeShipmentId, stopId: activeStopId, idempotencyKey: `${type}-${activeShipmentId}-${activeStopId}` })
     if (!result.ok) { setError(result.error || 'Unable to update stop.'); return }
     notify(`Stop updated: ${result.milestone.replaceAll('_', ' ')}.`)
   }
@@ -274,10 +278,11 @@ export default function DriverPortal({ demoController, incidents = INITIAL_INCID
         {inspect?.blocking ? <div className="dp-blocker"><span className="dp-symbol warn"><Icon name="clipboard" /></span><div><strong>{inspect.major ? 'This truck is out of service' : 'Inspection needed before you drive'}</strong><small>{inspect.reason}</small></div><Button onClick={() => go('inspection')}>{inspect.major ? 'Record a repair inspection' : 'Start inspection'}</Button></div>
           : inspect?.prompt ? <Row title="Record today’s trip inspection" sub="No inspection has been recorded in this app yet" icon="clipboard" onClick={() => go('inspection')} /> : null}
         {offer && prefs.offers && <Row title="A new load is waiting" sub={`${offer.offerId} · Review before ${time(offer.expiresAt)}`} onClick={() => go('offer')} icon="truck" />}
-        {dock ? <div className="dp-dock"><ShipmentVisit truck={{...truck, clock: world.clock}} stopId={truck.insideSiteId} /><div className="dp-actions">
+        {dock ? <div className="dp-dock"><span className="dp-eyebrow">{dockOperation === 'loading' ? 'PICKUP · LOADING' : 'DELIVERY · UNLOADING'}</span><ShipmentVisit truck={{...truck, clock: world.clock}} stopId={truck.insideSiteId} operation={dockOperation} /><div className="dp-actions">
           {activeShipmentId && (!visitMilestone || visitMilestone === 'stop.arrived') && <Button onClick={() => advanceVisit('checkInStop')}>Check in</Button>}
-          {visitMilestone === 'stop.checked_in' && <Button onClick={() => advanceVisit('startService')}>Start service</Button>}
-          {visitMilestone === 'stop.service_started' && <Button onClick={() => advanceVisit('completeService')}>Complete service</Button>}
+          {visitMilestone === 'stop.checked_in' && <Button onClick={() => advanceVisit('startService')}>Start {dockOperation}</Button>}
+          {visitMilestone === 'stop.service_started' && <Button onClick={() => advanceVisit('completeService')}>Confirm {dockOperation} complete</Button>}
+          {visitMilestone === 'stop.service_completed' && <Button onClick={() => advanceVisit('departStop')}>Confirm gate-out</Button>}
           <Button secondary onClick={() => go('delay')}>Report delay</Button><Button secondary onClick={() => go('help')}>Dispatch</Button>
         </div></div>
       : truck.state === 'resting' ? <Empty title="Take a well-earned break">{SITE_BY_ID[truck.insideSiteId]?.name || 'Truck is resting'}. Your hours update from telemetry.<Button secondary onClick={() => go('log')}>View your duty log</Button></Empty>

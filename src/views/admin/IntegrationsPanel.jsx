@@ -8,7 +8,7 @@ import { logAdminAction, ACTION } from '../../admin/audit.js'
 import { fmtTime, pct } from '../../format.js'
 import { SERVER_ENABLED } from '../../services/serverConfig.js'
 
-const SPEEDS = [10, 30, 60, 120]
+const SPEEDS = [1, 10, 30, 60, 120]
 
 /**
  * External services are proxied through the server (Phase C): the browser never
@@ -28,7 +28,7 @@ export default function IntegrationsPanel({ user, feeds }) {
   const world = useWorld()
   const store = useStore()
   const sim = useSim()
-  const [speed, setSpeed] = useState(() => sim?.getSpeed() ?? 30)
+  const [speed, setSpeed] = useState(() => sim?.getSpeed() ?? 1)
 
   function changeSpeed(n) {
     const before = speed

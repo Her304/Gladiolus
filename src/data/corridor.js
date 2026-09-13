@@ -1,12 +1,14 @@
 import { measurePath, chainageOf, haversine, positionAt } from '../engine/geo.js'
 import { APPROACH_KM } from '../contract.js'
+import { HIGHWAY_401_ROUTE } from './highway401-route.js'
 
 /**
  * Highway 401, Windsor -> Scarborough. Ordered west to east, so chainage
- * increases eastbound. Coarse by design: these stable points are the simulation
- * spine, while the driver map uses a separate road-snapped display trace.
+ * increases eastbound. The scalar simulation keeps this stable reference spine
+ * so its deterministic scenario timing does not change when map geometry is
+ * refined. Map clients use CORRIDOR_POINTS/ROAD_CORRIDOR below instead.
  */
-export const CORRIDOR_POINTS = [
+const CORRIDOR_REFERENCE_POINTS = [
   [42.3149, -83.0364], // Windsor
   [42.2559, -82.4363], // Tilbury
   [42.4048, -82.191], // Chatham
@@ -23,7 +25,11 @@ export const CORRIDOR_POINTS = [
   [43.777, -79.345], // Scarborough
 ]
 
-export const CORRIDOR = measurePath(CORRIDOR_POINTS)
+export const CORRIDOR = measurePath(CORRIDOR_REFERENCE_POINTS)
+
+/** Detailed road geometry for every map-facing coordinate and polyline. */
+export const CORRIDOR_POINTS = HIGHWAY_401_ROUTE
+export const ROAD_CORRIDOR = measurePath(HIGHWAY_401_ROUTE)
 
 /**
  * Sites the fleet visits. `stop` sites are customer and DC geofences; `parking`

@@ -44,6 +44,25 @@ function siteState(world, siteId) {
  * before any view knows how to read it.
  */
 export function applyEvent(world, e) {
+  // Simulated telemetry is resettable in a durable demo database. An old 30×
+  // run can otherwise leave future timestamps and orphaned trucks ahead of a
+  // freshly started real-time run. Configuration and audit history remain.
+  if (e.type === EVENT.SIMULATION_RESET) {
+    world.clock = e.at
+    world.trucks = {}
+    world.sites = {}
+    world.dwells = []
+    world.ladenKm = 0
+    world.emptyKm = 0
+    world.transits = 0
+    world.forcedStops = 0
+    world.shipments = {}
+    world.stops = {}
+    world.detention = []
+    world.exceptions = []
+    world.lastEventSeq = e.seq
+    return world
+  }
   world.clock = Math.max(world.clock, e.at)
   world.lastEventSeq = e.seq
 

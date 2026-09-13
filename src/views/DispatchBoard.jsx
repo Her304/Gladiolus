@@ -10,7 +10,7 @@ import { hosStatus, clockLeftMs, fmtClock } from '../engine/hos.js'
 import { ask, summariseBoard } from '../services/llm.js'
 import { issueCommand } from '../services/serverApi.js'
 
-const SPEEDS = [10, 30, 60, 120]
+const SPEEDS = [1, 10, 30, 60, 120]
 const INCIDENT_ROWS = 8
 
 export default function DispatchBoard({ incidents }) {
@@ -20,7 +20,7 @@ export default function DispatchBoard({ incidents }) {
   const events = useOperationalEvents()
   const [focusId, setFocusId] = useState(null)
   const [detailId, setDetailId] = useState(null)
-  const [speed, setSpeed] = useState(() => sim?.getSpeed() ?? 30)
+  const [speed, setSpeed] = useState(() => sim?.getSpeed() ?? 1)
   const [answer, setAnswer] = useState(null)
   const [asking, setAsking] = useState(false)
   const focusedPings = useTruckPings(focusId)
