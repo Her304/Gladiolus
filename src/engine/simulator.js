@@ -4,12 +4,19 @@ import {
 import { positionAt, headingAt } from './geo.js'
 import { transition } from './geofence.js'
 import { EVENT } from './events.js'
-import { APPROACH_KM } from '../contract.js'
+import { APPROACH_KM, DWELL_THRESHOLD_MIN } from '../contract.js'
 import { clockLeftMs, RESET_MS } from './hos.js'
 import { recommendParking, pressureFor } from './parking.js'
 import { seedFleet, mulberry32 } from '../data/seed.js'
 import { speedFactorAt } from '../services/on511.js'
 import { flowFactorAt } from '../services/tomtom.js'
+// v2 domain layer — the simulator now routes its flagged transitions through
+// the authoritative semantics (arrival ≠ delivery, pre-movement HOS guard,
+// load queue instead of random self-assignment, contract-driven detention).
+import { EVENT as V2_EVENT, DEFAULT_DETENTION_RULE } from '../domain/contract.js'
+import { gateMovement } from '../domain/command.js'
+import { calculateDetention, foldVisit } from '../domain/detention.js'
+import { createLoadBoard, createLoad } from '../domain/loadboard.js'
 
 /** Sim time between telemetry pings per truck. 40 trucks pinging every tick is
  *  unusable; once every 90 sim seconds keeps the log a manageable size. */
@@ -44,6 +51,26 @@ export function createSimulator(store, { startHour = 14 } = {}) {
   let incidents = []
   let flow = []
   let speedMultiplier = 30 // sim seconds per real second
+
+  // A shared open-load queue. Trucks no longer invent freight or self-assign
+  // after a dwell (assessment §8: "Load generation is not load matching"); they
+  // draw from this queue, which carries origin, destination, revenue, and
+  // equipment so feasibility can be checked before an offer is accepted.
+  const loadBoard = createLoadBoard()
+  let loadCounter = 9000
+  function postOpenLoad(originId, destinationId, revenue) {
+    const id = `L-${loadCounter++}`
+    loadBoard.postLoad(createLoad({
+      id, shipmentId: `SHP-${id}`, originId, destinationId,
+      readyAt: clock, expiresAt: clock + 4 * 3600_000, revenue,
+    }))
+    return id
+  }
+  // Seed the queue so trucks have real freight to pick up.
+  for (const s of STOP_SITES) {
+    const dest = STOP_SITES.find((o) => o.id !== s.id)
+    if (dest) postOpenLoad(s.id, dest.id, 800 + Math.floor(rnd() * 600))
+  }
 
   /**
    * The site this truck is currently heading off the highway for, if any: the
@@ -163,13 +190,34 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       if (tr.site.kind === 'stop' && tr.site.id === t.destinationId) {
         t.state = 'dwelling'
         t.speedKph = 0
-        t.dwellLeftMs = (35 + rnd() * 85) * 60_000
+        // Dwell deliberately spans the detention boundary sometimes: one in three
+        // visits exceeds the two-hour free time (the 150-min case), so the
+        // detention ledger exercises a billable charge instead of always landing
+        // under the threshold (assessment §5: the ordinary scenario never did).
+        t.dwellLeftMs = rnd() < 0.33
+          ? (125 + rnd() * 35) * 60_000 // 125–160 min: billable
+          : (35 + rnd() * 80) * 60_000  // 35–115 min: within free time
+        t.visitStart = clock
         if (t.laden) {
-          store.append(EVENT.LOAD_DELIVERED, clock, {
-            truckId: t.id, loadId: t.loadId, siteId: tr.site.id, siteName: tr.site.name,
+          // Arrival is NOT delivery (assessment §5: "The simulator conflates
+          // arrival with delivery"). The load stays attached while service and
+          // detention evidence accumulate. Delivery is the service-completion
+          // milestone, emitted when the dwell expires — not at fence entry.
+          t.stopId = `STP-${tr.site.id}`
+          t.shipmentId = t.shipmentId || `SHP-${t.loadId}`
+          store.append(V2_EVENT.SHIPMENT_POSTED, clock, {
+            shipmentId: t.shipmentId, kind: 'ftl', stops: [t.lastOriginId || 'STP-pu', t.stopId],
           })
-          t.laden = false
-          t.loadId = null
+          store.append(V2_EVENT.STOP_ARRIVED, clock, {
+            truckId: t.id, shipmentId: t.shipmentId, stopId: t.stopId,
+            facilityId: tr.site.id, providerId: `sim-arr-${t.id}-${t.visitStart}`,
+          })
+          store.append(V2_EVENT.STOP_CHECKED_IN, clock + 5 * 60_000, {
+            shipmentId: t.shipmentId, stopId: t.stopId, providerId: `sim-ci-${t.id}-${t.visitStart}`,
+          })
+          store.append(V2_EVENT.STOP_SERVICE_STARTED, clock + 10 * 60_000, {
+            shipmentId: t.shipmentId, stopId: t.stopId, providerId: `sim-ss-${t.id}-${t.visitStart}`,
+          })
         }
       } else if (tr.site.kind === 'parking' && shouldRest(t, tr.site)) {
         t.state = 'resting'
@@ -227,7 +275,7 @@ export function createSimulator(store, { startHour = 14 } = {}) {
   }
 
   function planParking(t) {
-    if (t.claimedSiteId || t.insideSiteId || t.state !== 'driving') return
+    if (t.claimedSiteId || t.insideSiteId || t.state !== 'driving' || clock < (t.parkingOptOutUntil || 0)) return
     if (clockLeftMs(t) > CLAIM_THRESHOLD_MS) return
     const rec = recommendParking(observable(t), store.getWorld(), new Date(clock))
     if (!rec?.best) return
@@ -276,18 +324,61 @@ export function createSimulator(store, { startHour = 14 } = {}) {
         t.dwellLeftMs -= dt
         t.onDutyMs += dt
         if (t.dwellLeftMs <= 0) {
+          // Service complete → delivery confirmed (NOT at fence entry). Then
+          // gate-out. The load is cleared here, after evidence accumulated.
+          if (t.laden && t.stopId) {
+            const serviceCompleteAt = t.visitStart + (t.dwellLeftMs <= 0 ? (clock - t.visitStart) : 0)
+            store.append(V2_EVENT.STOP_SERVICE_COMPLETED, clock, {
+              shipmentId: t.shipmentId, stopId: t.stopId, facilityId: t.insideSiteId,
+              providerId: `sim-sc-${t.id}-${t.visitStart}`,
+            })
+            store.append(V2_EVENT.STOP_DEPARTED, clock + 5 * 60_000, {
+              shipmentId: t.shipmentId, stopId: t.stopId, providerId: `sim-dep-${t.id}-${t.visitStart}`,
+            })
+            // Detention calculation from the accumulated visit evidence.
+            const visitEvents = store.events.filter((e) =>
+              e.stopId === t.stopId && (e.type || '').startsWith('stop.'))
+            const visit = foldVisit(visitEvents)
+            const calc = calculateDetention(visit, DEFAULT_DETENTION_RULE)
+            if (calc && calc.billableMinutes > 0) {
+              const claimId = `CLM-${t.shipmentId}`
+              store.append(V2_EVENT.DETENTION_ELIGIBLE, clock, {
+                claimId, shipmentId: t.shipmentId, stopId: t.stopId, ruleId: DEFAULT_DETENTION_RULE.id,
+              })
+              store.append(V2_EVENT.DETENTION_CALCULATED, clock, {
+                claimId, shipmentId: t.shipmentId, stopId: t.stopId, ruleId: DEFAULT_DETENTION_RULE.id,
+                billableMinutes: Math.round(calc.billableMinutes),
+              })
+            }
+            store.append(V2_EVENT.SHIPMENT_COMPLETED, clock, { shipmentId: t.shipmentId })
+            t.laden = false
+            t.loadId = null
+            t.stopId = null
+            t.shipmentId = null
+          }
           t.state = 'driving'
           t.destinationId = pickDestination(t)
-          if (rnd() < 0.72) {
-            t.laden = true
-            t.loadId = `L-${Math.floor(4000 + rnd() * 5000)}`
-            store.append(EVENT.LOAD_ASSIGNED, clock, {
-              truckId: t.id,
-              loadId: t.loadId,
-              siteId: t.insideSiteId,
-              destinationId: t.destinationId,
-              destinationName: SITE_BY_ID[t.destinationId]?.name,
-            })
+          // Draw the next load from the open queue — no random self-assignment
+          // (assessment §8). If the queue is empty, the truck runs empty to its
+          // destination; if a load is available, commit it atomically.
+          const openLoads = loadBoard.openQueue()
+          if (openLoads.length) {
+            const load = openLoads[Math.floor(rnd() * Math.min(openLoads.length, 5))]
+            const accept = loadBoard.acceptOffer(load.id, t.driverId, t.id, `sim-accept-${load.id}-${t.id}`, clock)
+            if (accept.ok) {
+              t.laden = true
+              t.loadId = load.id
+              t.shipmentId = load.shipmentId
+              t.lastOriginId = t.insideSiteId
+              t.destinationId = load.destinationId
+              store.append(EVENT.LOAD_ASSIGNED, clock, {
+                truckId: t.id, loadId: t.loadId, siteId: t.insideSiteId,
+                destinationId: t.destinationId, destinationName: SITE_BY_ID[t.destinationId]?.name,
+              })
+              // Replenish the queue so it never starves.
+              const dest = STOP_SITES.find((o) => o.id !== load.destinationId)
+              if (dest) postOpenLoad(load.destinationId, dest.id, 800 + Math.floor(rnd() * 600))
+            }
           }
         }
         handleFences(t)
@@ -312,11 +403,33 @@ export function createSimulator(store, { startHour = 14 } = {}) {
         break
       }
       default: {
-        drive(t, dt)
-        planParking(t)
-        // Checked after the fence pass so a truck that just rolled into a rest
-        // area is recorded as parked there, not as a roadside stop.
-        if (t.state === 'driving' && clockLeftMs(t) <= 0) forceRoadsideStop(t)
+        // Pre-movement safety gate (assessment §6: the v1 sim checked HOS
+        // *after* driving and let a truck roll ~375m before a forced stop).
+        // This runs BEFORE drive(): if HOS is exhausted or the vehicle is
+        // blocked, the truck holds and an exception is opened with a resolution
+        // deadline — no movement occurs.
+        const guard = gateMovement({
+          truck: { id: t.id, drivingMs: t.drivingMs, onDutyMs: t.onDutyMs, state: t.state },
+          vehicle: { available: !t.majorDefect, reason: t.majorDefect ? 'vehicle.defect' : null },
+          route: { impassable: Boolean(t.routeImpassable) },
+          assignmentId: t.shipmentId ? `ASN-${t.shipmentId}` : null,
+          now: clock,
+        })
+        if (guard.blocked) {
+          // Hold: don't drive. Emit the guard's events (exception opened +
+          // assignment withdrawn) so the dispatcher sees a resolution item.
+          if (guard.events) for (const e of guard.events) store.append(e.type, e.observedAt ?? clock, e)
+          t.state = 'resting'
+          t.speedKph = 0
+          t.restLeftMs = RESET_MS
+          t.forcedStop = true
+        } else {
+          drive(t, dt)
+          planParking(t)
+          // Checked after the fence pass so a truck that just rolled into a rest
+          // area is recorded as parked there, not as a roadside stop.
+          if (t.state === 'driving' && clockLeftMs(t) <= 0) forceRoadsideStop(t)
+        }
       }
     }
     if (clock - (t.lastPingAt || 0) >= PING_INTERVAL_MS) emitPing(t)
@@ -340,5 +453,25 @@ export function createSimulator(store, { startHour = 14 } = {}) {
     getSpeed: () => speedMultiplier,
     getClock: () => clock,
     getTruck: (id) => trucks.get(id),
+    /** Driver choices update the physical model and emit the same events as automation. */
+    driverParking(truckId, siteId) {
+      const t = trucks.get(truckId)
+      if (!t) return { ok: false, error: 'Truck is unavailable.' }
+      if (siteId) {
+        const site = SITE_BY_ID[siteId]
+        const ahead = site && (site.chainage - t.chainage) * t.direction
+        if (!site || site.kind !== 'parking' || ahead <= 0 || ahead / Math.max(t.speedKph, 40) * 3600000 > clockLeftMs(t)) return { ok: false, error: 'This stop is not reachable on your remaining hours.' }
+        if (t.claimedSiteId === siteId) return { ok: true }
+        releaseClaim(t, 'driver changed planned stop')
+        t.claimedSiteId = siteId
+        store.append(EVENT.PARKING_CLAIM, clock, { truckId, siteId, siteName: site.name, etaMin: Math.round(ahead / Math.max(t.speedKph, 40) * 60) })
+      } else {
+        releaseClaim(t, 'driver released claim')
+        t.parkingOptOutUntil = clock + 5 * 60000
+      }
+      emitPing(t)
+      store.commit()
+      return { ok: true }
+    },
   }
 }

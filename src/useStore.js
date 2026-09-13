@@ -30,3 +30,14 @@ export function useFeed(limit = 30) {
   useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion)
   return store.feed(limit)
 }
+
+/**
+ * The raw event log — for projections that need to fold domain events (shipment
+ * stops, detention) directly rather than reading the v1 truck world. The list
+ * reference is stable per version, so memoization works.
+ */
+export function useEvents() {
+  const store = useStore()
+  useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion)
+  return store.events
+}

@@ -106,3 +106,38 @@ export function speedFactorAt(chainage, incidents, direction) {
   }
   return factor
 }
+
+/**
+ * Incidents a truck has still to drive through, nearest first.
+ *
+ * These are already fetched, already filtered to the 401 and already folded
+ * into the simulator's edge weights — the driver was simply never shown them.
+ * Surfacing the same list costs nothing and answers the question a driver
+ * actually has, which is not "how fast is the corridor" but "what is between me
+ * and my stop".
+ */
+export function incidentsAhead(truck, incidents, withinKm = 120) {
+  if (!truck) return []
+  return incidents
+    .filter((inc) => {
+      const applies =
+        inc.direction === 'Both' ||
+        (truck.direction === 1 && /east/i.test(inc.direction)) ||
+        (truck.direction === -1 && /west/i.test(inc.direction))
+      if (!applies) return false
+      const ahead = (inc.chainage - truck.chainage) * truck.direction
+      return ahead > 0 && ahead <= withinKm
+    })
+    .map((inc) => ({ ...inc, ahead: (inc.chainage - truck.chainage) * truck.direction }))
+    .sort((a, b) => a.ahead - b.ahead)
+}
+
+/** Shorter, human labels for the 511 event taxonomy. */
+export function incidentLabel(type) {
+  if (/closure/i.test(type)) return 'Closure'
+  if (/accident|incident/i.test(type)) return 'Collision'
+  if (/construction|roadwork/i.test(type)) return 'Construction'
+  if (/weather|condition/i.test(type)) return 'Conditions'
+  if (/special|event/i.test(type)) return 'Event'
+  return 'Advisory'
+}

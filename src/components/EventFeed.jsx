@@ -1,4 +1,6 @@
 import { EVENT } from '../contract.js'
+import { defectLabels } from '../engine/inspection.js'
+import { CATEGORY_BY_ID } from '../engine/breakdown.js'
 import { fmtTime } from '../format.js'
 
 /** One line of plain English per event. The log is the product's spine. */
@@ -21,8 +23,17 @@ function describe(e) {
     case EVENT.PARKING_RELEASE: return `gave up its space at ${e.siteName} — ${e.reason}`
     case EVENT.FORCED_STOP:
       return `OUT OF HOURS on the shoulder, ${e.shortfallKm} km short of ${e.nearestSiteName}`
+    case EVENT.DRIVER_ACTION:
+      return `${e.action.replaceAll('.', ' ')}${e.message ? ` — ${e.message}` : ''}`
     case EVENT.ADMIN_ACTION:
       return e.detail ? `${e.action} — ${e.detail}` : e.action
+    // Only inspections carrying a defect reach the feed — see isFeedWorthy.
+    case EVENT.INSPECTION:
+      return `${e.major ? 'FAILED' : 'flagged'} a ${e.phase} inspection — ${defectLabels(e.defects).join(', ')}`
+    case EVENT.BREAKDOWN:
+      return `is down at km ${Math.round(e.chainage)} — ${(CATEGORY_BY_ID[e.category]?.label ?? e.category).toLowerCase()}${e.blockingLane ? ', BLOCKING A LIVE LANE' : ''}`
+    case EVENT.BREAKDOWN_CLEARED:
+      return 'is rolling again after a breakdown'
     default: return e.type
   }
 }
@@ -37,7 +48,7 @@ export default function EventFeed({ events }) {
       </p>
       <ul className="feed">
         {events.map((e) => (
-          <li key={e.seq} className={e.type === EVENT.FORCED_STOP ? 'alarm' : undefined}>
+          <li key={e.seq} className={e.type === EVENT.FORCED_STOP || e.type === EVENT.BREAKDOWN || (e.type === EVENT.INSPECTION && e.major) ? 'alarm' : undefined}>
             <time>{fmtTime(e.at)}</time>
             <span>
               <span className="who">{e.truckId || e.actor}</span> {describe(e)}

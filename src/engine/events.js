@@ -19,6 +19,14 @@ export function emptyWorld() {
     transits: 0,
     forcedStops: 0,
     lastEventSeq: -1,
+    // v2 domain state — the shipment/stop/detention/exception projections.
+    // These are folds over the v2 event vocabulary (domain/contract.js); the
+    // v1 events above are unchanged. A view reads these via useEvents() +
+    // projectShipment(), not by mutating the world directly.
+    shipments: {},    // shipmentId → { status, stops, assignmentId }
+    stops: {},        // stopId → { milestone, shipmentId, visitEvents: [] }
+    detention: [],    // calculated detention claims
+    exceptions: [],   // open exception cases
   }
 }
 
@@ -121,8 +129,43 @@ export function applyEvent(world, e) {
       })
       break
     }
-    default:
+    default: {
+      // v2 domain events. These are folded here so the world carries the
+      // shipment/stop/detention/exception state the dispatch surfaces project.
+      // Unknown types still advance the clock (the line above) and do nothing
+      // else, so adding a new event type before any fold knows it is safe.
+      const t = e.type || ''
+      if (t.startsWith('shipment.')) {
+        const s = world.shipments[e.shipmentId] || { status: 'posted', stops: [], assignmentId: null }
+        if (t === 'shipment.posted') { s.status = 'posted'; s.stops = e.stops || [] }
+        else if (t === 'assignment.committed') { s.status = 'assigned'; s.assignmentId = e.assignmentId }
+        else if (t === 'shipment.completed') s.status = 'completed'
+        else if (t === 'shipment.cancelled') s.status = 'cancelled'
+        world.shipments[e.shipmentId] = s
+      } else if (t.startsWith('stop.')) {
+        const st = world.stops[e.stopId] || { milestone: 'none', shipmentId: e.shipmentId, visitEvents: [] }
+        st.shipmentId = e.shipmentId || st.shipmentId
+        st.visitEvents.push(e)
+        const rank = { none: 0, arrived: 1, checked_in: 2, service_started: 3, service_completed: 4, departed: 5 }
+        const target = { 'stop.arrived': 'arrived', 'stop.checked_in': 'checked_in', 'stop.service_started': 'service_started', 'stop.service_completed': 'service_completed', 'stop.departed': 'departed' }[t]
+        if (target && (rank[target] || 0) > (rank[st.milestone] || 0)) st.milestone = target
+        world.stops[e.stopId] = st
+      } else if (t === 'detention.calculated') {
+        world.detention.push({
+          claimId: e.claimId, shipmentId: e.shipmentId, stopId: e.stopId,
+          ruleId: e.ruleId, billableMinutes: e.billableMinutes, state: 'eligible', at: e.at,
+        })
+      } else if (t === 'exception.opened') {
+        world.exceptions.push({
+          id: `EX-${e.seq}`, severity: e.severity, reason: e.reason,
+          affectedTruck: e.affectedTruck, state: 'open', deadline: e.deadline, at: e.at,
+        })
+      } else if (t === 'exception.resolved') {
+        const ex = world.exceptions.find((x) => x.state !== 'resolved')
+        if (ex) { ex.state = 'resolved'; ex.resolution = e.resolution }
+      }
       break
+    }
   }
   return world
 }

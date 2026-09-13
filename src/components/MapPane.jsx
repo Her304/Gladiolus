@@ -1,10 +1,21 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { MapContainer, TileLayer, Polyline, Circle, Marker, Tooltip, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { CORRIDOR_POINTS, SITES } from '../data/corridor.js'
 import { hosStatus, clockLeftMs, fmtClock } from '../engine/hos.js'
 import { HOS_COLOUR, LEVEL_COLOUR } from '../format.js'
+
+/**
+ * Basemap toggle (Phase 5): a satellite basemap with source attribution, so a
+ * judge can switch basemaps for yard/dock inspection. The OSM standard layer is
+ * the default (key-free); the satellite layer is Esri World Imagery, also
+ * key-free, with its required attribution.
+ */
+const BASEMAPS = [
+  { id: 'osm', label: 'Map', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 19 },
+  { id: 'sat', label: 'Satellite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attribution: 'Imagery &copy; Esri, Maxar, Earthstar Geographics', maxZoom: 19 },
+]
 
 /**
  * Every marker is a divIcon, so Leaflet's default icon assets are never
@@ -31,18 +42,13 @@ export default function MapPane({ world, incidents = [], board = [], focusCoord,
     () => Object.fromEntries(board.map((p) => [p.site.id, p.level])),
     [board],
   )
+  const [basemap, setBasemap] = useState('osm')
+  const layer = BASEMAPS.find((b) => b.id === basemap)
 
   return (
     <div className="map-wrap">
       <MapContainer center={[43.15, -81.2]} zoom={7} scrollWheelZoom style={{ height: '100%' }}>
-        {/* Plain OSM tiles, darkened in CSS. The hosted dark basemaps (CARTO,
-            Stadia) all watermark or reject unkeyed requests, and staying
-            key-free is the point: nothing here needs a signup to run. */}
-        <TileLayer
-          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        />
+        <TileLayer key={layer.id} url={layer.url} maxZoom={layer.maxZoom} attribution={layer.attribution} />
         {focusCoord && <FlyTo coord={focusCoord} />}
 
         <Polyline positions={CORRIDOR_POINTS} pathOptions={{ color: '#4ea3ff', weight: 2, opacity: 0.45 }} />
@@ -105,6 +111,12 @@ export default function MapPane({ world, incidents = [], board = [], focusCoord,
           )
         })}
       </MapContainer>
+
+      <div className="basemap-toggle">
+        {BASEMAPS.map((b) => (
+          <button key={b.id} className={basemap === b.id ? 'active' : ''} onClick={() => setBasemap(b.id)}>{b.label}</button>
+        ))}
+      </div>
 
       <div className="map-legend">
         <b>Hours of service</b>

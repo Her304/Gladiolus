@@ -16,15 +16,37 @@ const SESSION_KEY = 'corridor.session'
 export const isStaff = (u) => u?.role === 'dispatch' || u?.role === 'admin'
 export const isAdmin = (u) => u?.role === 'admin'
 
-/** A customer link carries the load it may view. Encoded, not signed. */
-export function makeCustomerToken(loadId, truckId) {
-  return btoa(JSON.stringify({ loadId, truckId })).replace(/=+$/, '')
+/**
+ * A customer tracking link is shipment-scoped, expiring, and revocable
+ * (assessment §8/C11: the old token was unsigned base64 and followed the truck's
+ * current destination, so a reassignment could expose the next customer's
+ * shipment). The grant binds to ONE shipmentId; the truck's next load never
+ * leaks through it. In the browser-only fallback the grant is encoded (labelled
+ * prototype); the server path signs it with an HMAC (server/app.js mintToken).
+ */
+const CUSTOMER_TTL_MS = 72 * 3600_000
+
+export function makeCustomerToken(loadId, truckId, shipmentId) {
+  const payload = {
+    loadId, truckId,
+    shipmentId: shipmentId || (loadId ? `SHP-${loadId}` : null),
+    scope: 'shipment',
+    exp: Date.now() + CUSTOMER_TTL_MS,
+  }
+  return `grant.${btoa(JSON.stringify(payload)).replace(/=+$/, '')}`
 }
 
 export function readCustomerToken(token) {
   try {
-    const parsed = JSON.parse(atob(token))
-    return parsed?.truckId ? parsed : null
+    if (!token || !token.startsWith('grant.')) {
+      // Legacy unsigned token — reject rather than silently honoring it, so an
+      // old link cannot follow a truck's next destination after reassignment.
+      return null
+    }
+    const parsed = JSON.parse(atob(token.slice(6)))
+    if (!parsed?.shipmentId) return null
+    if (parsed.exp && Date.now() > parsed.exp) return { expired: true, shipmentId: parsed.shipmentId }
+    return parsed
   } catch {
     return null
   }

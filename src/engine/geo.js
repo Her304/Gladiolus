@@ -47,8 +47,13 @@ export function measurePath(points) {
 export function positionAt(path, km) {
   const { points, cum, length } = path
   const d = Math.max(0, Math.min(km, length))
-  let i = 1
-  while (i < cum.length - 1 && cum[i] < d) i++
+  let low = 1, high = cum.length - 1
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (cum[mid] < d) low = mid + 1
+    else high = mid
+  }
+  const i = low
   const span = cum[i] - cum[i - 1]
   const t = span === 0 ? 0 : (d - cum[i - 1]) / span
   const a = points[i - 1]

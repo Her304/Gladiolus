@@ -64,6 +64,9 @@ simulator (physics) ──emits──▶ event log ──fold──▶ world ─
 | `src/engine/geofence.js` | Enter/exit with hysteresis |
 | `src/engine/hos.js` | Canadian hours of service, and `reachableKm` |
 | `src/engine/parking.js` | The fleet-as-sensor occupancy model |
+| `src/engine/scales.js` | The same model, pointed at inspection stations |
+| `src/engine/inspection.js` | Daily trip inspections, as a fold |
+| `src/engine/breakdown.js` | Open breakdowns and the vendor book |
 | `src/engine/simulator.js` | The physical model |
 | `src/engine/metrics.js` | Dashboard folds |
 | `src/services/` | Ontario 511, TomTom, the LLM layer |
@@ -160,8 +163,79 @@ Copy `.env.example` to `.env`. All three are optional.
 |---|---|---|
 | `VITE_TOMTOM_KEY` | Live speeds along the corridor | Cached flow sample |
 | `VITE_LLM_KEY` | Backhaul reasoning, drafted emails, board queries | Cached responses |
-| `VITE_ROUTING_KEY` | Reserved for predictive ETA | Unused today |
+| `VITE_ROUTING_KEY` | Reserved for future predictive ETA | Driver road routing still works |
 
 TomTom is sampled at eight fixed points every three minutes — roughly 1,280
 calls a day against a 2,500 free-tier ceiling. Ontario 511 is free and key-free
 and is cached for five minutes, well inside its ten-calls-a-minute limit.
+
+### Interactive driver portal
+
+Open `/#/driver-demo/today` for the interactive tour or `/#/driver` for the
+seeded truck/PIN sign-in. The scenario selector covers rolling, load offers,
+dock waits, low hours, rest, start of shift and a breakdown. Each scenario starts a fresh, isolated session;
+it never changes the main fleet. Demo actions and telemetry live in the event
+log and reset on refresh. Notification preferences are saved per truck on this
+device. Driver requests are recorded in an in-app event feed, not sent by email
+or SMS. Document storage is not connected.
+
+The signed-in driver portal reads the main fleet telemetry. Parking choices
+update the simulator and shared event log; a manual release pauses automatic
+reclaiming for five simulated minutes. The existing live engine has no load-offer
+queue, elapsed clock or cycle total: those are demonstrated by the isolated
+scenario model, and unavailable live counters are shown as unavailable.
+Every driver page uses the same swipeable content-and-navigation island: pull it
+down for the full map, or up for the page view. On desktop that island stays on
+the right while the map uses the full canvas. Route geometry is road-snapped by
+the local `/api/route` OSRM proxy in development, with a bundled detailed Highway
+401 trace as the offline/static-build fallback.
+
+#### Beyond parking
+
+Four things sit alongside parking under the **Ahead** tab and the duty log.
+
+**Facilities** are static reference data on each rest area — washrooms, showers,
+food, overnight, pull-through. They qualify a stop rather than list one, because
+a driver settles parking first and amenities second, so they render as chips on
+the stop card and as a tail on the parking row.
+
+**Inspection stations** reuse the parking trick. No feed says whether an MTO
+scale is open, but an open station is visible in our own telemetry: every truck
+that passes one must enter it. The estimator counts trucks decelerating within
+3 km of a station — but only *relative to the ambient speed of the fleet on the
+same stretch*. That control is the whole point. Congestion slows trucks too, and
+a bare speed threshold would report every traffic jam as an open scale; when
+ambient speed itself collapses, nothing is inferred, because in gridlock the
+signal genuinely is not there. Confidence, sample size and the time-of-day prior
+are all shown on the detail screen for the same reason `FLEET_SHARE` is.
+
+**Roadside service** is a short vendor book keyed to stretches of corridor, not a
+"repair shops near me" search. A driver on a live shoulder needs the one number
+the carrier will pay, not ten options to evaluate. The feature that matters is
+the breakdown report: one tap puts position, load and remaining hours in front of
+a dispatcher, and routes to a vendor who covers that kilometre for that fault,
+with a backup for when the first cannot come out. Every category at every
+kilometre of the corridor reaches somebody — the smoke suite asserts it, because
+a dead end there is a dead end where a driver can least afford one.
+
+**Daily trip inspections** (Schedule 1, O. Reg. 199/07) are the one driver
+feature a fleet app cannot treat as optional. A major defect puts the truck out
+of service and the Today screen leads with it. One deliberate restraint: a truck
+with *no* record is prompted, never blocked. An empty log means this portal has
+not seen an inspection, not that the driver failed to do one, and asserting a
+legal violation from absent data would be the worst possible place to start —
+the same discipline as "no earlier history is inferred" in the duty log.
+
+**Incidents** were already fetched, already filtered to the 401 and already
+folded into the simulator's edge weights. The driver was simply never shown them.
+
+Fuel is deliberately absent. A tractor does not use gas stations, fleet fuelling
+is a card-network and tax decision made by dispatch rather than a driver, and a
+363 km corridor is inside a single tank either way.
+
+`node scripts/driver-smoke.mjs` checks load acceptance/rejection/expiry,
+parking claims and releases, request validation and event replay, including
+parking actions against the main simulator. It also covers facility data
+integrity, the prompt-versus-block inspection rule and major-defect clearing,
+vendor coverage across every fault and kilometre, the scale estimator's
+congestion control and carriageway filter, and incident direction filtering.

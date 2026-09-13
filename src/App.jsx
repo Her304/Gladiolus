@@ -5,12 +5,22 @@ import { store, sim, startRuntime } from './runtime.js'
 import { fetchIncidents, INITIAL_INCIDENTS } from './services/on511.js'
 import { fetchFlow, INITIAL_FLOW } from './services/tomtom.js'
 import DispatchBoard from './views/DispatchBoard.jsx'
-import DriverView from './views/DriverView.jsx'
+import DetentionLedger from './views/DetentionLedger.jsx'
+import DriverView, { DriverDemo, DriverSignIn } from './driver/DriverPortal.jsx'
 import Dashboard from './views/Dashboard.jsx'
 import CustomerView from './views/CustomerView.jsx'
 import AdminConsole from './views/AdminConsole.jsx'
 import SignIn from './views/SignIn.jsx'
 import { fmtTime } from './format.js'
+import { createServerClient } from './services/serverClient.js'
+import { ConnectionBadge, attachServerClient } from './components/ConnectionBadge.jsx'
+
+// One authoritative server client per session. Browsers are clients, not
+// separate fleet worlds (plan §3.1): this connects to the shared SSE stream
+// and falls back to the local sim, labelled, when no server is reachable.
+const serverClient = createServerClient({ onEvent: (e) => store.append(e.type, e.observedAt ?? e.at, e) })
+attachServerClient(serverClient)
+serverClient.connect()
 
 /** Hash routing, because the whole app is four screens and a shared link. */
 function useHashRoute() {
@@ -62,7 +72,10 @@ function Shell() {
     const a = setInterval(pullIncidents, 5 * 60_000)
     const b = setInterval(pullFlow, 3 * 60_000)
     return () => { alive = false; clearInterval(a); clearInterval(b) }
-  }, [])
+  }, [store, sim])
+
+  if (hash.startsWith('#/driver-demo')) return <DriverDemo />
+  if (hash.startsWith('#/driver') && user?.role !== 'driver') return <DriverSignIn />
 
   // A customer link is public by design: no sign-in, one load, less detail.
   if (hash.startsWith('#/t/')) {
@@ -71,6 +84,7 @@ function Shell() {
         <header className="topbar">
           <div className="brand">Gladiolus <span>Corridor</span></div>
           <div className="spacer" />
+          <ConnectionBadge />
           <Clock />
         </header>
         <CustomerView token={hash.slice(4)} />
@@ -84,6 +98,7 @@ function Shell() {
         <header className="topbar">
           <div className="brand">Gladiolus <span>Corridor</span></div>
           <div className="spacer" />
+          <ConnectionBadge />
           <Clock />
         </header>
         <SignIn />
@@ -93,12 +108,14 @@ function Shell() {
 
   const staff = isStaff(user)
   const admin = isAdmin(user)
+  if (!staff) return <DriverView />
 
   // Routing is a fold over (role, hash) with the role winning, so a driver who
   // types #/admin lands on their own screen rather than a blank one.
   let view = 'driver'
   if (staff) {
     if (hash === '#/dashboard') view = 'dashboard'
+    else if (hash === '#/detention') view = 'detention'
     else if (hash === '#/admin') view = admin ? 'admin' : 'board'
     else view = 'board'
   }
@@ -106,7 +123,7 @@ function Shell() {
   function shareLink() {
     const truck = Object.values(store.getWorld().trucks).find((t) => t.laden)
     if (!truck) return
-    const token = makeCustomerToken(truck.loadId, truck.id)
+    const token = makeCustomerToken(truck.loadId, truck.id, truck.shipmentId)
     go(`/t/${token}`)
   }
 
@@ -119,6 +136,7 @@ function Shell() {
           <nav className="nav">
             <button aria-current={view === 'board'} onClick={() => go('/board')}>Board</button>
             <button aria-current={view === 'dashboard'} onClick={() => go('/dashboard')}>Dashboard</button>
+            <button aria-current={view === 'detention'} onClick={() => go('/detention')}>Detention</button>
             {admin && (
               <button aria-current={view === 'admin'} onClick={() => go('/admin')}>Admin</button>
             )}
@@ -126,6 +144,7 @@ function Shell() {
         )}
 
         <div className="spacer" />
+        <ConnectionBadge />
         <Clock />
         <span className="clock feeds" title="Where the live layers are coming from">
           511 {feeds.incidents} · flow {feeds.flow}
@@ -137,9 +156,10 @@ function Shell() {
       </header>
 
       {view === 'board' && <DispatchBoard incidents={incidents} />}
+      {view === 'detention' && <DetentionLedger />}
       {view === 'dashboard' && <Dashboard />}
       {view === 'admin' && <AdminConsole feeds={feeds} />}
-      {view === 'driver' && <DriverView />}
+      {view === 'driver' && <DriverView incidents={incidents} />}
     </div>
   )
 }
