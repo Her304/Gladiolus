@@ -8,8 +8,10 @@
  * rounding, amount, uncertainty, and review state. The evidence package is
  * exportable.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useEvents } from '../useStore.js'
+import { useAuth, isAdmin } from '../auth/AuthContext.jsx'
+import { issueCommand, exportReviewedDetention } from '../services/serverApi.js'
 import { projectShipment, createShipment } from '../domain/shipment.js'
 import { DEFAULT_DETENTION_RULE } from '../domain/contract.js'
 import { fmtTime } from '../format.js'
@@ -18,7 +20,27 @@ const H = 3600_000
 
 export default function DetentionLedger() {
   const events = useEvents()
+  const { user } = useAuth()
+  const [busy, setBusy] = useState('')
+  const [message, setMessage] = useState('')
   const { entries, exceptions } = useMemo(() => projectLedger(events), [events])
+
+  async function transition(entry, type, reason) {
+    setBusy(`${entry.claimId}:${type}`)
+    const result = await issueCommand({
+      type, claimId: entry.claimId, shipmentId: entry.shipmentId,
+      stopId: entry.stopId, reason,
+    })
+    setMessage(result.ok ? `Claim ${entry.claimId} ${result.state}.` : result.error || 'Command failed.')
+    setBusy('')
+  }
+
+  async function exportBilling() {
+    setBusy('billing')
+    const result = await exportReviewedDetention()
+    setMessage(result.ok ? `${result.exported} reviewed claim${result.exported === 1 ? '' : 's'} exported to billing.` : result.error || 'Export failed.')
+    setBusy('')
+  }
 
   return (
     <div className="page">
@@ -27,6 +49,11 @@ export default function DetentionLedger() {
           <h2>Detention ledger</h2>
           <span className="muted">Two-hour free time · live FTL · {entries.length} stop{entries.length === 1 ? '' : 's'}</span>
         </div>
+        <div className="ledger-toolbar">
+          <span className="muted">Review creates the approval event; billing export sends only reviewed claims.</span>
+          {isAdmin(user) && <button className="ghost" disabled={busy === 'billing'} onClick={exportBilling}>{busy === 'billing' ? 'Exporting…' : 'Export reviewed to billing'}</button>}
+        </div>
+        {message && <p className="banner" role="status">{message}</p>}
 
         {exceptions.length > 0 && (
           <div className="exception-queue">
@@ -66,7 +93,11 @@ export default function DetentionLedger() {
                   <td><span className={`state state-${e.state}`}>{e.state}</span></td>
                   <td className="muted">{e.uncertainty || '—'}</td>
                   <td>
-                    <button className="ghost" onClick={() => exportEvidence(e)}>Export</button>
+                    <div className="ledger-actions">
+                      {e.state === 'calculated' && <button className="ghost" disabled={Boolean(busy)} onClick={() => transition(e, 'reviewDetention')}>Review</button>}
+                      {['calculated', 'reviewed', 'adjusted'].includes(e.state) && <button className="ghost" disabled={Boolean(busy)} onClick={() => transition(e, 'waiveDetention', 'waived in detention ledger')}>Waive</button>}
+                      <button className="ghost" onClick={() => exportEvidence(e)}>Evidence JSON</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -79,7 +110,7 @@ export default function DetentionLedger() {
 }
 
 /** Project the ledger from accumulated stop-visit events. */
-function projectLedger(allEvents) {
+export function projectLedger(allEvents) {
   // Collect visit/shipment/detention events. In the browser-local fallback these
   // come from the in-memory store; when the server client is connected they
   // arrive via the SSE stream and are appended here.
@@ -95,9 +126,16 @@ function projectLedger(allEvents) {
   const entries = []
   const exceptions = []
   for (const [shipmentId, evs] of byShipment) {
-    const stopIds = [...new Set(evs.map((e) => e.stopId).filter(Boolean))]
-    const stops = stopIds.map((id, i) => ({ id, shipmentId, sequence: i, role: i === 0 ? 'pickup' : 'delivery', facilityId: null, milestone: 'none', visit: null }))
-    if (stops.length < 2) continue
+    const posted = evs.find((e) => e.type === 'shipment.posted')
+    const observedStopIds = [...new Set(evs.map((e) => e.stopId).filter(Boolean))]
+    const declaredStopIds = (posted?.stops || []).filter(Boolean)
+    let stopIds = [...new Set([...declaredStopIds, ...observedStopIds])]
+    if (stopIds.length === 1) stopIds = [`${shipmentId}:pickup`, stopIds[0]]
+    if (stopIds.length === 0) continue
+    const stops = stopIds.map((id, i) => ({
+      id, shipmentId, sequence: i, role: i === stopIds.length - 1 ? 'delivery' : 'pickup',
+      facilityId: id, milestone: 'none', visit: null,
+    }))
     const ship = createShipment({ id: shipmentId, kind: 'ftl', stops })
     const proj = projectShipment(evs, ship, DEFAULT_DETENTION_RULE)
     for (const entry of proj.ledger) {

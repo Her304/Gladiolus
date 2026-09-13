@@ -1,23 +1,20 @@
 import fixture from '../fixtures/on511-events.js'
 import { CORRIDOR, offCorridorKm } from '../data/corridor.js'
 import { chainageOf } from '../engine/geo.js'
+import { SERVER_ENABLED, apiUrl } from './serverConfig.js'
 
 /**
- * Ontario 511. Free, no key, throttled to 10 calls a minute — so we cache hard
- * and never poll near the ceiling. Two failure modes are expected and both fall
- * back to the bundled fixture: a dead connection, and CORS.
+ * Ontario 511 (Phase C). The browser calls the server proxy
+ * (/api/traffic/incidents); the server fetches 511on.ca so CORS and rate-limit
+ * burden never reach the client. Field casing is normalised defensively and has
+ * been checked against a live payload: all nine fields read below are present,
+ * PascalCase, on all province-wide records. The lowercase fallbacks are
+ * belt-and-braces, not a guess.
  *
- * CORS note: 511on.ca does not reliably send access-control headers, so a direct
- * browser fetch can fail even when the service is healthy. vite.config proxies
- * /api/511 in dev. A static production build needs an equivalent proxy (a
- * serverless function) or it runs on the fixture.
- *
- * Field casing is normalised defensively and has been checked against a live
- * payload: all nine fields read below are present, PascalCase, on all 469
- * province-wide records. The lowercase fallbacks are belt-and-braces, not a
- * guess.
+ * Note: getToken is imported lazily inside fetchIncidents so this module can be
+ * imported by the server (which only uses INITIAL_INCIDENTS + the helpers)
+ * without pulling in the React AuthContext (.jsx).
  */
-const BASE = import.meta.env?.DEV ? '/api/511' : 'https://511on.ca'
 const TTL_MS = 5 * 60_000
 const CORRIDOR_TOLERANCE_KM = 12
 
@@ -39,6 +36,7 @@ const ON_401 = /\b401\b/
 let cache = { at: 0, data: null, source: 'none' }
 
 function normalise(raw) {
+  if (Array.isArray(raw?.coord) && Number.isFinite(raw.chainage)) return raw
   const lat = Number(raw.Latitude ?? raw.latitude)
   const lon = Number(raw.Longitude ?? raw.longitude)
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
@@ -69,15 +67,22 @@ export const INITIAL_INCIDENTS = fromFixture()
 export async function fetchIncidents({ force = false } = {}) {
   const now = Date.now()
   if (!force && cache.data && now - cache.at < TTL_MS) return cache
+  if (!SERVER_ENABLED) { cache = { at: now, data: fromFixture(), source: 'cached', reason: 'no server (local sim)' }; return cache }
+  // Lazy import so the server (which imports INITIAL_INCIDENTS) doesn't pull in
+  // the React AuthContext (.jsx). Only the browser fetch path needs the token.
+  const { getToken } = await import('../auth/AuthContext.jsx')
   try {
-    const res = await fetch(`${BASE}/api/v2/get/event?format=json&lang=en`, {
+    // The browser calls the server proxy (Phase C); the server fetches 511on.ca
+    // so the key/CORS burden never reaches the client.
+    const res = await fetch(apiUrl('/api/traffic/incidents'), {
+      headers: { Authorization: `Bearer ${getToken()}` },
       signal: AbortSignal.timeout(6000),
     })
-    if (!res.ok) throw new Error(`511 responded ${res.status}`)
-    const json = await res.json()
-    const list = Array.isArray(json) ? json : (json?.events ?? [])
+    if (!res.ok) throw new Error(`server responded ${res.status}`)
+    const r = await res.json()
+    const list = Array.isArray(r.data) ? r.data : []
     const data = list.map(normalise).filter(Boolean)
-    cache = { at: now, data, source: 'live' }
+    cache = { at: now, data, source: r.source || 'cached' }
   } catch (err) {
     cache = { at: now, data: fromFixture(), source: 'cached', error: String(err) }
   }
@@ -92,11 +97,7 @@ export async function fetchIncidents({ force = false } = {}) {
 export function speedFactorAt(chainage, incidents, direction) {
   let factor = 1
   for (const inc of incidents) {
-    const applies =
-      inc.direction === 'Both' ||
-      (direction === 1 && /east/i.test(inc.direction)) ||
-      (direction === -1 && /west/i.test(inc.direction))
-    if (!applies) continue
+    if (!incidentApplies(inc, direction)) continue
     const spread = inc.fullClosure ? 14 : 9
     const dist = Math.abs(chainage - inc.chainage)
     if (dist > spread) continue
@@ -105,6 +106,41 @@ export function speedFactorAt(chainage, incidents, direction) {
     factor = Math.min(factor, 1 - (1 - worst) * intensity)
   }
   return factor
+}
+
+/**
+ * Does an incident apply to a truck's direction? The 511 vocabulary includes
+ * "Both Directions" and "All Directions" (assessment §8: the old matcher only
+ * recognized the bare word "Both" plus east/west text). This recognizes the full
+ * documented set.
+ */
+export function incidentApplies(inc, direction) {
+  const d = String(inc.direction || '').toLowerCase()
+  if (/^(both|all)/.test(d)) return true
+  if (direction === 1 && /east/.test(d)) return true
+  if (direction === -1 && /west/.test(d)) return true
+  return false
+}
+
+/**
+ * Classify a full mainline closure as an impassable route edge, distinguishing
+ * mainline from ramp-only (assessment §8: "A ramp closure and a mainline
+ * closure cannot safely be treated as the same corridor penalty"). A full
+ * closure makes the edge impassable; a non-closure incident only slows traffic.
+ *
+ * @returns {{impassable:boolean, closureKind?:'mainline'|'ramp', chainage:number}[]}
+ */
+export function closureEdges(incidents) {
+  return (incidents || [])
+    .filter((inc) => inc.fullClosure)
+    .map((inc) => {
+      // 511 event descriptions distinguish mainline from ramp; absent a parsed
+      // ramp field, treat a full closure as mainline (the conservative read).
+      const desc = String(inc.description || '').toLowerCase()
+      const closureKind = /ramp|exit|entrance/.test(desc) ? 'ramp' : 'mainline'
+      return { impassable: closureKind === 'mainline', closureKind, chainage: inc.chainage, direction: inc.direction }
+    })
+    .filter((e) => e.impassable)
 }
 
 /**
@@ -120,11 +156,7 @@ export function incidentsAhead(truck, incidents, withinKm = 120) {
   if (!truck) return []
   return incidents
     .filter((inc) => {
-      const applies =
-        inc.direction === 'Both' ||
-        (truck.direction === 1 && /east/i.test(inc.direction)) ||
-        (truck.direction === -1 && /west/i.test(inc.direction))
-      if (!applies) return false
+      if (!incidentApplies(inc, truck.direction)) return false
       const ahead = (inc.chainage - truck.chainage) * truck.direction
       return ahead > 0 && ahead <= withinKm
     })

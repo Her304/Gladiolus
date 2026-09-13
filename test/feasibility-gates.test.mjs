@@ -59,7 +59,7 @@ describe('Phase 3 — elapsed/cycle exhaustion blocks even with driving hours', 
 
 describe('Phase 3 — dock HOS expiry holds movement', () => {
   test('a driver at the HOS limit at a dock is blocked before movement', () => {
-    const truck = { id: 'GLD-101', drivingMs: HOS_LIMITS.DRIVING_MS, onDutyMs: HOS_LIMITS.ON_DUTY_MS, state: 'dwelling' }
+    const truck = { id: 'GLD-101', drivingMs: HOS_LIMITS.DRIVING_MS, onDutyMs: HOS_LIMITS.ON_DUTY_MS, elapsedMs: 8 * H, cycleMs: 20 * H, regime: 'cycle1', state: 'dwelling' }
     const r = gateMovement({ truck, vehicle: { available: true }, route: { impassable: false }, assignmentId: 'ASN-1' })
     assert.equal(r.ok, false)
     assert.equal(r.blocked, true)
@@ -79,7 +79,7 @@ describe('Phase 3 — dock HOS expiry holds movement', () => {
   })
 
   test('a driver with hours remaining is not blocked', () => {
-    const truck = { id: 'GLD-101', drivingMs: 2 * H, onDutyMs: 3 * H, state: 'dwelling' }
+    const truck = { id: 'GLD-101', drivingMs: 2 * H, onDutyMs: 3 * H, elapsedMs: 4 * H, cycleMs: 20 * H, regime: 'cycle1', state: 'dwelling' }
     const r = gateMovement({ truck, vehicle: { available: true }, route: { impassable: false } })
     assert.equal(r.ok, true)
     assert.equal(r.blocked, undefined)
@@ -106,7 +106,7 @@ describe('Phase 3 — closures invalidate the route', () => {
     const route = { edges: [{ closed: true, closureKind: 'mainline' }] }
     const rf = routeFeasibility(route)
     assert.equal(rf.impassable, true)
-    const r = gateMovement({ truck: { drivingMs: 0, onDutyMs: 0 }, vehicle: { available: true }, route: { impassable: rf.impassable } })
+    const r = gateMovement({ truck: { drivingMs: 0, onDutyMs: 0, elapsedMs: 0, cycleMs: 0, regime: 'cycle1' }, vehicle: { available: true }, route: { impassable: rf.impassable } })
     assert.equal(r.blocked, true)
     assert.equal(r.reason, BLOCKER.ROUTE_CLOSURE)
   })

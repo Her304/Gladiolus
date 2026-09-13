@@ -138,3 +138,51 @@ a.dp-button{text-decoration:none}
 
 @keyframes dp-sheet-rise{from{opacity:.7;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
 @keyframes dp-sheet-settle{from{opacity:.8;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
+
+/* Customer tracking portal — the read-only companion to the driver app.
+   Same dp-shell tokens, but a floating card over the map: no nav, no sheet, no
+   camera controls. A customer watches a single truck move towards one stop and
+   reaches dispatch through two labelled actions. */
+.cp-shell{background:var(--dp-bg)}
+.cp-header{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 26px;height:72px;background:#ffffff;border-bottom:1px solid var(--dp-line);position:relative;z-index:4}
+.cp-header-right{display:flex;align-items:center;gap:16px}
+.cp-header .dp-clock{font-size:12px;font-variant-numeric:tabular-nums}
+
+/* The map fills the screen behind the header; the card floats above it like
+   the driver app's bottom island, but anchored lower and centred. The dp-app
+   class is added so DriverMap's Camera can locate its root (it queries
+   .dp-app); the height/position are owned by cp-app below. */
+.cp-app{position:absolute;inset:72px 0 0;max-width:1600px;margin:auto;left:0;right:0;isolation:isolate;height:auto}
+.cp-app .dp-map{position:absolute;inset:0;z-index:0;background:#e1ead9}
+.cp-map-empty{position:absolute;inset:0;background:#e1ead9}
+.cp-route-header{position:absolute;top:14px;left:18px;right:18px;z-index:3;background:#fffffff2;border:1px solid #d2e5d7;border-radius:18px;padding:13px 14px;backdrop-filter:blur(12px);text-align:center}
+.cp-route-header h1{font-size:17px;line-height:1.3;font-weight:650}
+.cp-route-header p{font-size:12px;margin-top:4px}
+
+/* The floating content island sits above the map at the bottom of the screen,
+   scrollable when the content is taller than the card. On wide screens it is a
+   centred column; on a phone it spans the width. */
+.cp-main{position:absolute;inset:auto 0 0 0;display:flex;flex-direction:column;max-height:64%;overflow-y:auto;overscroll-behavior:contain;padding:0 18px calc(20px + env(safe-area-inset-bottom));scrollbar-width:thin;scrollbar-color:#b5c5b8 transparent;z-index:3;pointer-events:none}
+.cp-main>*{pointer-events:auto}
+.cp-island{width:100%;max-width:520px;margin:0 auto;filter:drop-shadow(0 14px 28px #294d3a1b)}
+.cp-island .dp-card{border-radius:24px;padding:24px 22px 22px;animation:dp-in .22s ease-out}
+.cp-island .dp-identity{padding-bottom:18px;margin-bottom:18px}
+.cp-island .dp-stats{margin:18px 0}
+.cp-island .dp-stats b{font-size:22px}
+.cp-island .dp-info{margin:16px 0 4px}
+.cp-actions{margin-top:18px}
+.cp-actions .dp-button{flex:1;min-height:49px}
+.cp-actions .dp-secondary{flex:0.85}
+.cp-actions a{text-decoration:none}
+
+@media(min-width:760px){
+  .cp-header{height:85px;padding:0 36px}
+  .cp-app{inset:85px 0 0}
+  .cp-route-header{max-width:520px;left:50%;transform:translateX(-50%);right:auto;width:calc(100% - 48px)}
+  .cp-main{inset:auto 0 24px 0;max-height:60%}
+}
+@media(max-width:430px){
+  .cp-actions .dp-button span{display:none}
+  .cp-route-header h1{font-size:15px}
+}
+@media(prefers-reduced-motion:reduce){.cp-island .dp-card{animation:none}}

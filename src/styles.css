@@ -83,6 +83,64 @@ a { color: var(--accent); }
 
 .board { display: flex; flex: 1; min-height: 0; }
 .board .map-wrap { flex: 1; min-width: 0; position: relative; }
+.workflow {
+  width: 410px; flex: 0 0 410px; overflow-y: auto; padding: 16px;
+  background: #0f141c; border-right: 1px solid var(--line);
+}
+.workflow-head, .workflow-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.workflow-head { margin-bottom: 14px; }
+.workflow-head h1 { margin: 2px 0 0; font-size: 22px; letter-spacing: -.03em; }
+.eyebrow { color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .12em; }
+.recovery { text-align: right; display: grid; }
+.recovery b { color: var(--ok); font: 700 19px var(--mono); }
+.recovery span { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.workflow-create { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); margin-bottom: 12px; }
+.workflow-create summary { cursor: pointer; padding: 10px 12px; font-weight: 700; }
+.workflow-form { display: grid; gap: 9px; padding: 0 12px 12px; }
+.workflow-form label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+.workflow-form input, .workflow-form select { width: 100%; min-width: 0; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
+.field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.primary-action { border: 0; border-radius: 7px; padding: 9px 12px; background: var(--accent); color: #04101f; font-weight: 800; }
+.workflow-message { border-left: 3px solid var(--accent); background: var(--panel-2); padding: 8px 10px; margin: 10px 0; font-size: 12px; }
+.workflow-section { border-top: 1px solid var(--line); padding: 14px 0; }
+.workflow-title h2 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.workflow-title > span { font: 11px var(--mono); color: var(--accent); }
+.workflow-hint { color: var(--muted); font-size: 11px; margin: 7px 0 9px; }
+.load-list { display: grid; gap: 6px; margin-top: 9px; }
+.load-card { width: 100%; display: flex; justify-content: space-between; gap: 10px; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 9px 10px; }
+.load-card.active { border-color: var(--accent); background: var(--panel-2); }
+.load-card > span { display: grid; min-width: 0; }
+.load-card > span:last-child { text-align: right; }
+.load-card small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 245px; }
+.load-status { text-transform: uppercase; letter-spacing: .06em; }
+.load-status.assigned { color: var(--ok); }
+.load-status.offered { color: var(--warn); }
+.candidate { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.candidate-focus { display: grid; text-align: left; background: none; border: 0; padding: 0; min-width: 0; }
+.candidate-focus span { color: var(--muted); font-size: 11px; }
+.owned-exception { display: grid; gap: 4px; border-left: 2px solid var(--crit); padding: 8px 0 8px 10px; margin-top: 8px; }
+.owned-exception span { color: var(--muted); font-size: 11px; }
+.owned-exception div { display: flex; gap: 6px; }
+
+/* Assignment request card — the one driver/route a dispatcher acts on once a
+   load is assigned. Mirrors the load-card surface but gathers the driver's
+   hours, log, road ahead, and the customer/driver contact actions in one place. */
+.request-card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px; margin-top: 4px; }
+.request-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.request-head .candidate-focus b { font-size: 14px; }
+.request-link { padding: 6px 10px; font-size: 12px; flex-shrink: 0; }
+.request-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.request-label { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.request-block { display: grid; gap: 6px; margin-top: 12px; }
+.request-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.request-log li { display: flex; align-items: baseline; gap: 8px; font-size: 12px; min-width: 0; }
+.request-log time { font-family: var(--mono); color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.request-log small { color: var(--muted); }
+.request-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--warn); }
+.request-badge.closure { color: var(--crit); }
+.request-reply { display: flex; gap: 6px; }
+.request-reply input { flex: 1; min-width: 0; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
+.request-reply input::placeholder { color: var(--muted); }
 .rail {
   width: 370px;
   border-left: 1px solid var(--line);
@@ -165,6 +223,22 @@ a { color: var(--accent); }
 .feed .who { font-family: var(--mono); color: var(--accent); }
 .feed .alarm { background: rgba(255, 107, 94, 0.1); }
 .feed .alarm .who { color: var(--crit); }
+
+/* Inline reply field under a driver's request in the dispatcher feed. */
+.feed .reply { width: 100%; margin-top: 6px; }
+.feed .reply-row { display: flex; gap: 6px; }
+.feed .reply-row input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.feed .reply-row input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.feed .reply-row button { white-space: nowrap; }
 
 /* ---------- hours of service ---------- */
 
@@ -342,6 +416,14 @@ tr.alarm td { background: rgba(255, 107, 94, 0.1); }
 .map-legend div:first-of-type { margin-top: 6px; }
 .map-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 .map-legend b { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.trace-inspector { position: absolute; z-index: 500; top: 58px; left: 12px; width: 285px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(20,26,36,.96); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.trace-inspector > div:first-child { display: flex; justify-content: space-between; align-items: center; }
+.trace-inspector button { border: 0; background: none; color: var(--muted); font-size: 20px; }
+.trace-inspector p { margin: 5px 0; color: var(--muted); font-size: 11px; }
+.trace-inspector p strong { color: var(--text); }
+.trace-inspector small { color: var(--muted); }
+.trace-speeds { height: 46px; display: flex; gap: 2px; align-items: end; margin: 8px 0 5px; border-bottom: 1px solid var(--line); }
+.trace-speeds i { flex: 1; min-width: 2px; max-width: 7px; background: var(--warn); border-radius: 2px 2px 0 0; }
 
 /* ---------- responsive: judges open this on a phone ---------- */
 
@@ -350,6 +432,7 @@ tr.alarm td { background: rgba(255, 107, 94, 0.1); }
      screen before any fleet data appeared. */
   .topbar .feeds, .topbar .wide-only { display: none; }
   .board { flex-direction: column; }
+  .workflow { width: auto; flex: none; max-height: 58vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .board .map-wrap { height: 46vh; flex: none; }
   .rail { width: auto; border-left: 0; border-top: 1px solid var(--line); flex: 1; }
   .topbar { padding: 9px 12px; gap: 9px; }
@@ -386,6 +469,8 @@ tr.alarm td { background: rgba(255, 107, 94, 0.1); }
 .ledger td { padding: 9px 10px; border-bottom: 1px solid var(--line); }
 .ledger tr:hover td { background: rgba(0,0,0,.02); }
 .exception-queue { margin-bottom: 16px; }
+.ledger-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0 14px; }
+.ledger-actions { display: flex; gap: 6px; flex-wrap: wrap; min-width: 220px; }
 .exception-queue h3 { font-size: 13px; margin: 0 0 8px; }
 .exception-row { display: flex; gap: 12px; padding: 7px 10px; border-radius: 6px; background: var(--card); margin-bottom: 4px; align-items: center; }
 .ex-warn { border-left: 3px solid #d97706; }
@@ -430,3 +515,23 @@ tr.alarm td { background: rgba(255, 107, 94, 0.1); }
 }
 .basemap-toggle button { border: 0; background: transparent; padding: 4px 9px; font-size: 11px; border-radius: 4px; cursor: pointer; color: #333; }
 .basemap-toggle button.active { background: #1a1a2e; color: #fff; }
+
+/* ---------- shipment timeline (Phase 2) ---------- */
+
+.shipment-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; }
+.shipment-tabs button { border: 1px solid var(--line); background: var(--card); padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.shipment-tabs button.active { background: #1a1a2e; color: #fff; }
+.timeline-status { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.timeline-stops { display: flex; gap: 16px; margin-bottom: 16px; }
+.timeline-stop { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; }
+.shipment-timeline-list { display: flex; flex-direction: column; gap: 0; }
+.timeline-event { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.timeline-event time { font-size: 12px; color: var(--muted); min-width: 64px; font-variant-numeric: tabular-nums; }
+.timeline-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.dot-milestone { background: #2563eb; }
+.dot-billing { background: #8a5a00; }
+.dot-exception { background: #b91c1c; }
+.dot-assignment { background: #7c3aed; }
+.dot-shipment { background: #0a7f3f; }
+.timeline-event span:last-child { display: flex; flex-direction: column; }
+.timeline-event small { font-size: 11px; }

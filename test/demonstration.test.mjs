@@ -17,7 +17,7 @@ const T0 = Date.UTC(2026, 8, 13, 13, 0, 0)
 const MIN = 60_000
 
 describe('demonstration shipment — end-to-end detention', () => {
-  test('dwell-150 scenario → 30 billable min, eligible claim, exportable', () => {
+  test('dwell-150 scenario → 30 billable min, calculated claim, exportable', () => {
     const { events, shipmentId, stopId, rule } = runDemonstrationShipment({ scenario: 'dwell-150', t0: T0 })
     const ship = createShipment({
       id: shipmentId, kind: 'ftl',
@@ -32,7 +32,7 @@ describe('demonstration shipment — end-to-end detention', () => {
     assert.equal(proj.ledger.length, 1)
     const entry = proj.ledger[0]
     assert.equal(Math.round(entry.billableMinutes), 30)
-    assert.equal(entry.state, 'eligible')
+    assert.equal(entry.state, 'calculated')
     // Exportable evidence package
     assert.ok(entry.arrived && entry.serviceComplete && entry.freeStart && entry.chargeEnd)
     assert.equal(entry.ruleId, rule.id)

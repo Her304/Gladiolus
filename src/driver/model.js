@@ -18,8 +18,24 @@ export function recordAction(store, truckId, action, detail = {}) {
 export function latestOffer(events, truckId) {
   const actions = driverActions(events, truckId)
   const offer = actions.findLast(e => e.action === 'load.offered')
-  if (!offer || actions.some(e => e.offerId === offer.offerId && ['load.accepted', 'load.rejected'].includes(e.action))) return null
-  return offer
+  if (offer && !actions.some(e => e.offerId === offer.offerId && ['load.accepted', 'load.rejected'].includes(e.action))) return offer
+
+  // Authoritative server offers use the v2 lifecycle rather than a browser-
+  // local driver.action. Join the offer with its posted load specification.
+  const created = events.findLast((e) => e.type === 'offer.created' && e.truckId === truckId)
+  if (!created) return null
+  const closed = events.some((e) => e.loadId === created.loadId && ['offer.accepted', 'offer.rejected'].includes(e.type) && e.seq >= created.seq)
+  if (closed) return null
+  const posted = events.findLast((e) => e.type === 'shipment.posted' && (e.loadId === created.loadId || e.shipmentId === created.shipmentId))
+  return {
+    ...created,
+    offerId: created.loadId,
+    originId: created.originId || posted?.originId || posted?.stops?.[0],
+    destinationId: created.destinationId || posted?.destinationId || posted?.stops?.at(-1),
+    distanceKm: posted?.distanceKm || 0,
+    weightKg: created.payloadKg || posted?.payloadKg || 0,
+    dueAt: posted?.appointment || posted?.expiresAt,
+  }
 }
 
 /** Project the simulator's lightweight GPS trace onto the detailed 401 road
@@ -59,6 +75,43 @@ export function dutySegments(events, truckId) {
   return segments
 }
 
+/**
+ * A driver's completed loads — the "previous tasks." Folds the event stream
+ * for one truck into a list of loads that were assigned and delivered, with
+ * the origin, destination, and completion time. Shown on the log screen so a
+ * driver can see what they've done this session, not just the duty chart.
+ */
+export function loadHistory(events, truckId) {
+  const loads = new Map() // loadId → { loadId, assignedAt, destinationId, destinationName, completedAt, departedAt }
+  for (const e of events) {
+    if (e.truckId !== truckId && e.truckId !== undefined) continue
+    // v1: load.assigned (the active sim still emits this)
+    if (e.type === EVENT.LOAD_ASSIGNED && e.loadId) {
+      loads.set(e.loadId, {
+        loadId: e.loadId,
+        assignedAt: e.at,
+        destinationId: e.destinationId,
+        destinationName: e.destinationName || SITE_BY_ID[e.destinationId]?.name,
+        completedAt: null, departedAt: null,
+      })
+    }
+    // v2: shipment.completed (the new milestone-based flow)
+    if (e.type === 'shipment.completed' || e.type === 'stop.service_completed') {
+      for (const l of loads.values()) {
+        if (l.completedAt == null && e.shipmentId && (e.shipmentId === `SHP-${l.loadId}` || e.shipmentId === l.loadId)) {
+          l.completedAt = e.at
+        }
+      }
+    }
+    if (e.type === 'stop.departed') {
+      for (const l of loads.values()) {
+        if (l.departedAt == null && l.completedAt != null) l.departedAt = e.at
+      }
+    }
+  }
+  return [...loads.values()].sort((a, b) => (b.assignedAt || 0) - (a.assignedAt || 0))
+}
+
 /** A separate, explicitly labelled scenario store keeps the interactive tour
  * from modifying the running fleet. The UI consumes the same telemetry contract. */
 export function createDriverDemo() {
@@ -93,6 +146,27 @@ export function createDriverDemo() {
     // about something else entirely.
     if (next !== 'inspection') store.append(EVENT.INSPECTION, clock - 6 * H, { truckId: DEMO_ID, phase: 'pre-trip', defects: [], major: false, odometerKm: truck.odometerKm - 420, note: '' })
     if (next === 'offer') store.append(DRIVER_EVENT, clock, { truckId: DEMO_ID, action: 'load.offered', offerId: 'MG-4490', originId: 'london-dc', destinationId: 'cambridge-dc', distanceKm: 110, weightKg: 18400, expiresAt: clock + 4 * 60000, dueAt: clock + 3 * H })
+    // Seed a driver request with a dispatcher reply on the two scenes a judge
+    // lands on first (rolling is the default; critical is the parking crunch).
+    // The reply threads under the request by seq so "Your requests" nests it.
+    // New demo-submitted requests get no auto-reply — its absence is the
+    // "awaiting reply" state, since there is no dispatcher in the demo.
+    if (next === 'rolling' || next === 'critical') {
+      const req = store.append(DRIVER_EVENT, clock - 12 * 60000, {
+        truckId: DEMO_ID, action: 'delay.reported',
+        message: next === 'critical'
+          ? 'Down to 90 min of drive time, closest lot may be full.'
+          : 'Traffic building past Milton, may be 20 min late to the DC.',
+        reason: 'Loading / unloading',
+      })
+      store.append(DRIVER_EVENT, clock - 4 * 60000, {
+        truckId: DEMO_ID, action: 'dispatch.replied',
+        message: next === 'critical'
+          ? 'Hold at Trafalgar — a bay is opening up. Routing you now.'
+          : 'Noted, receiving team is expecting you. Safe travels.',
+        replyTo: req.seq, actor: 'Dispatch',
+      })
+    }
     store.commit()
   }
   function act(action, detail = {}) {

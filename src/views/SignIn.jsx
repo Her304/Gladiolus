@@ -2,20 +2,28 @@ import { useState } from 'react'
 import { useAuth } from '../auth/AuthContext.jsx'
 import { SEED_DRIVERS } from '../data/seed.js'
 
+const DEV = import.meta.env?.DEV
 const DEMO_DRIVER = SEED_DRIVERS[0]
+// Vite removes this development-only credential from production builds. The
+// full driver credential directory lives exclusively in server/seed-users.js.
+const DEV_DRIVER_PIN = DEV ? '8101' : ''
 
 export default function SignIn() {
   const { signInDriver, signInDispatch, signInAdmin } = useAuth()
   const [tab, setTab] = useState('dispatch')
   const [error, setError] = useState(null)
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault()
     const f = new FormData(e.currentTarget)
     let res
-    if (tab === 'driver') res = signInDriver(f.get('truckId'), f.get('pin'))
-    else if (tab === 'admin') res = signInAdmin(f.get('email'), f.get('password'))
-    else res = signInDispatch(f.get('email'), f.get('password'))
+    try {
+      if (tab === 'driver') res = await signInDriver(f.get('truckId'), f.get('pin'))
+      else if (tab === 'admin') res = await signInAdmin(f.get('email'), f.get('password'))
+      else res = await signInDispatch(f.get('email'), f.get('password'))
+    } catch {
+      res = { ok: false, error: 'Could not reach the server.' }
+    }
     setError(res.ok ? null : res.error)
   }
 
@@ -42,24 +50,24 @@ export default function SignIn() {
               <input
                 name="email"
                 type="email"
-                defaultValue={tab === 'admin' ? 'admin@gladiolus.ca' : 'dispatch@gladiolus.ca'}
+                defaultValue={DEV ? (tab === 'admin' ? 'admin@gladiolus.ca' : 'dispatch@gladiolus.ca') : ''}
                 autoComplete="off"
               />
             </label>
             <label>
               Password
-              <input name="password" type="password" defaultValue="corridor" autoComplete="off" />
+              <input name="password" type="password" defaultValue={DEV ? 'corridor' : ''} autoComplete="off" />
             </label>
           </>
         ) : (
           <>
             <label>
               Truck number
-              <input name="truckId" defaultValue={DEMO_DRIVER.truckId} autoComplete="off" />
+              <input name="truckId" defaultValue={DEV ? DEMO_DRIVER.truckId : ''} autoComplete="off" />
             </label>
             <label>
               PIN
-              <input name="pin" inputMode="numeric" defaultValue={DEMO_DRIVER.pin} autoComplete="off" />
+              <input name="pin" type="password" inputMode="numeric" defaultValue={DEV_DRIVER_PIN} autoComplete="current-password" />
             </label>
           </>
         )}
@@ -68,11 +76,9 @@ export default function SignIn() {
       </form>
 
       <div className="banner" style={{ marginTop: 20 }}>
-        <strong>Prototype auth.</strong> Credentials are seeded and compared in
-        the browser against a list bundled into the app; the customer tracking
-        link is encoded, not signed. That is a scoped decision for the
-        prototype, not an oversight — none of it should survive contact with
-        production.
+        <strong>Server-enforced access.</strong> Passwords are hashed at rest;
+        customer tracking links are signed, expiring, revocable, and scoped to
+        one shipment.
       </div>
     </div>
   )

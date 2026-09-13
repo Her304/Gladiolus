@@ -39,13 +39,10 @@ export default function AdminConsole({ feeds }) {
         </div>
       </div>
 
-      <div className="banner banner-warn">
-        <strong>The gate on this screen is a client-side <code>if</code>.</strong> The
-        role comes from a seeded account object compared in the browser and kept in{' '}
-        <code>localStorage</code>, so anyone who can open devtools can reach this
-        console. Nothing behind it is protected; it is a layout of what an admin
-        surface would own, not an access control. The first thing production needs
-        is the role decided server-side, next to the data it guards.
+      <div className="banner">
+        <strong>Server-enforced administration.</strong> The signed session is
+        validated on every protected API route. Hiding this route is only a UI
+        convenience; authorization is enforced again beside the data it guards.
       </div>
 
       <div className="tabs" style={{ marginTop: 16 }}>

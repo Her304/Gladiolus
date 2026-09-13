@@ -54,7 +54,7 @@ export function ConnectionBadge() {
     connected: 'Live',
     connecting: 'Connecting…',
     disconnected: 'Disconnected',
-    local: 'Local sim',
+    local: 'Demo sim',
   }[s.state] || s.state
   const cls = `conn-badge conn-${s.state}`
   const age = s.dataAgeMs == null ? '' : ` · ${fmtAge(s.dataAgeMs)} ago`

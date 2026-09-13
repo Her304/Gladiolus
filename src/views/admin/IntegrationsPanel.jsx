@@ -6,20 +6,22 @@ import { DWELL_THRESHOLD_MIN, APPROACH_KM } from '../../contract.js'
 import { CORRIDOR } from '../../data/corridor.js'
 import { logAdminAction, ACTION } from '../../admin/audit.js'
 import { fmtTime, pct } from '../../format.js'
+import { SERVER_ENABLED } from '../../services/serverConfig.js'
 
 const SPEEDS = [10, 30, 60, 120]
 
 /**
- * Keys are reported present or absent and never printed. That distinction is
- * not theatre: `VITE_` variables are inlined into the bundle at build time, so
- * anything the console could display, a visitor could already read — but a
- * console that renders a key onto a demo-room projector adds a way to leak it
- * that reading the bundle does not.
+ * External services are proxied through the server (Phase C): the browser never
+ * holds an API key. This panel reports the feed status (live/cached) the
+ * surfaces already track, and notes that keys are configured server-side. The
+ * actual key presence is checked via /api/health or the integrations health
+ * endpoint — not by reading VITE_ vars (which no longer exist).
  */
-const KEYS = [
-  { name: 'VITE_TOMTOM_KEY', service: 'TomTom flow', present: Boolean(import.meta.env?.VITE_TOMTOM_KEY), without: 'Cached flow sample' },
-  { name: 'VITE_LLM_KEY', service: 'Anthropic', present: Boolean(import.meta.env?.VITE_LLM_KEY), without: 'Cached responses' },
-  { name: 'VITE_ROUTING_KEY', service: 'Predictive ETA', present: Boolean(import.meta.env?.VITE_ROUTING_KEY), without: 'Unused today' },
+const SERVICES = [
+  { name: 'TomTom flow', env: 'TOMTOM_KEY', proxy: '/api/traffic/flow', without: 'Cached flow sample' },
+  { name: 'Anthropic LLM', env: 'LLM_KEY', proxy: '/api/llm/ask', without: 'Cached responses' },
+  { name: 'Ontario 511', env: '(no key)', proxy: '/api/traffic/incidents', without: 'Bundled fixture' },
+  { name: 'OSRM routing', env: 'OSRM_URL', proxy: '/api/route', without: 'Bundled 401 trace' },
 ]
 
 export default function IntegrationsPanel({ user, feeds }) {
@@ -59,38 +61,36 @@ export default function IntegrationsPanel({ user, feeds }) {
           </tbody>
         </table>
         <p className="note" style={{ paddingLeft: 0 }}>
-          511 has no key and is proxied through Vite in development because it
-          does not reliably send CORS headers. A static production build has no
-          such proxy and will read <span className="mono">cached</span> here until a
-          function sits in front of it.
+          511 has no key. The shared Node server proxies it in development and
+          production so provider CORS and rate limits never reach the browser.
         </p>
       </section>
 
       <section className="card" style={{ marginTop: 16 }}>
-        <h3>Keys</h3>
+        <h3>External services (server-side keys)</h3>
         <table style={{ marginTop: 8 }}>
           <thead>
-            <tr><th>Variable</th><th>Service</th><th>Status</th><th>Without it</th></tr>
+            <tr><th>Service</th><th>Server env</th><th>Proxy</th><th>Without it</th></tr>
           </thead>
           <tbody>
-            {KEYS.map((k) => (
-              <tr key={k.name}>
-                <td className="mono">{k.name}</td>
-                <td>{k.service}</td>
-                <td><span className={`tag tag-${k.present ? 'live' : 'absent'}`}>{k.present ? 'configured' : 'not set'}</span></td>
-                <td>{k.without}</td>
+            {SERVICES.map((s) => (
+              <tr key={s.name}>
+                <td>{s.name}</td>
+                <td className="mono">{s.env}</td>
+                <td className="mono">{s.proxy}</td>
+                <td>{s.without}</td>
               </tr>
             ))}
           </tbody>
         </table>
         <p className="note" style={{ paddingLeft: 0 }}>
-          Presence only — values are never rendered. Every one of these is
-          inlined into the client bundle at build time, which is acceptable for a
-          throwaway demo key and wrong for anything else.
+          Keys live on the server and are never sent to the browser. The browser
+          calls the proxy paths above; the server forwards to the provider with
+          the server-side key. A missing key degrades to the cached fallback.
         </p>
       </section>
 
-      <section className="card" style={{ marginTop: 16 }}>
+      {!SERVER_ENABLED && <section className="card" style={{ marginTop: 16 }}>
         <div className="row">
           <h3 style={{ flex: 1 }}>Simulation</h3>
           <span className="note" style={{ padding: 0 }}>Speed</span>
@@ -104,7 +104,7 @@ export default function IntegrationsPanel({ user, feeds }) {
           <span>Trucks reporting</span><b className="mono">{Object.keys(world.trucks).length}</b>
           <span>Corridor length</span><b className="mono">{CORRIDOR.length.toFixed(1)} km</b>
         </div>
-      </section>
+      </section>}
 
       <section className="card" style={{ marginTop: 16 }}>
         <h3>Engine constants</h3>

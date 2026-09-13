@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+.env.*
+data
+exports
+*.log
+.git
+.github
+.claude
+output
+screenshots
+design

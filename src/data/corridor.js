@@ -91,6 +91,11 @@ export const SITES = RAW_SITES.map((s) => ({
   chainage: chainageOf(CORRIDOR, s.coord),
 }))
 
+/** Immutable reset values for the server-backed capacity configuration. */
+export const BASE_SITE_CAPACITIES = Object.freeze(Object.fromEntries(
+  RAW_SITES.filter((s) => s.kind === 'parking').map((s) => [s.id, s.spaces]),
+))
+
 export const SITE_BY_ID = Object.fromEntries(SITES.map((s) => [s.id, s]))
 export const PARKING_SITES = SITES.filter((s) => s.kind === 'parking').sort(
   (a, b) => a.chainage - b.chainage,

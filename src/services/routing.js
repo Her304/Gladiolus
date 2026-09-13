@@ -1,21 +1,30 @@
 const cache = new Map()
+import { SERVER_ENABLED, apiUrl } from './serverConfig.js'
 
-const rounded = ([lat, lon]) => `${lon.toFixed(5)},${lat.toFixed(5)}`
+const rounded = ([lat, lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`
+const osrmCoordinate = ([lat, lon]) => `${lon.toFixed(5)},${lat.toFixed(5)}`
 
 /**
- * Ask the development routing proxy for an OSM road-snapped route. The proxy
- * keeps cross-origin policy and provider choice out of the driver client. A
- * deployed static build simply falls back to the bundled Highway 401 trace.
+ * Road-snapped routing (Phase C). The browser calls the server proxy
+ * (/api/route?from=lat,lon&to=lat,lon); the server fetches OSRM so the provider
+ * choice and cross-origin policy stay out of the client. A deployed build with
+ * no server falls back to the bundled Highway 401 trace (the caller handles the
+ * throw). getToken is imported lazily to avoid pulling React into non-browser
+ * consumers.
  */
 export async function roadRoute(from, to, { signal } = {}) {
   const key = `${rounded(from)};${rounded(to)}`
   if (cache.has(key)) return cache.get(key)
-  const response = await fetch(`/api/route/route/v1/driving/${key}?overview=full&geometries=geojson&steps=false`, { signal })
+  if (!SERVER_ENABLED) throw new Error('no server (local sim)')
+  const { getToken } = await import('../auth/AuthContext.jsx')
+  const response = await fetch(
+    apiUrl(`/api/route?from=${osrmCoordinate(from)}&to=${osrmCoordinate(to)}`),
+    { headers: { Authorization: `Bearer ${getToken()}` }, signal },
+  )
   if (!response.ok) throw new Error(`Routing request failed with ${response.status}`)
   const data = await response.json()
-  const coordinates = data?.routes?.[0]?.geometry?.coordinates
-  if (data?.code !== 'Ok' || !Array.isArray(coordinates) || coordinates.length < 2) throw new Error('No road route returned')
-  const points = coordinates.map(([lon, lat]) => [lat, lon])
+  if (!data?.ok || !data.route?.coordinates) throw new Error('No road route returned')
+  const points = data.route.coordinates.map(([lon, lat]) => [lat, lon])
   cache.set(key, points)
   return points
 }

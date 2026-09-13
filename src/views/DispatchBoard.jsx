@@ -2,10 +2,12 @@ import { useMemo, useState } from 'react'
 import MapPane from '../components/MapPane.jsx'
 import ParkingPanel from '../components/ParkingPanel.jsx'
 import EventFeed from '../components/EventFeed.jsx'
-import { useWorld, useFeed, useSim } from '../useStore.js'
+import DispatchWorkflow from '../components/DispatchWorkflow.jsx'
+import { useWorld, useFeed, useSim, useEvents } from '../useStore.js'
 import { pressureBoard, recommendParking } from '../engine/parking.js'
 import { hosStatus, clockLeftMs, fmtClock } from '../engine/hos.js'
 import { ask, summariseBoard } from '../services/llm.js'
+import { issueCommand } from '../services/serverApi.js'
 
 const SPEEDS = [10, 30, 60, 120]
 const INCIDENT_ROWS = 8
@@ -14,6 +16,7 @@ export default function DispatchBoard({ incidents }) {
   const world = useWorld()
   const feed = useFeed(40)
   const sim = useSim()
+  const events = useEvents()
   const [focusId, setFocusId] = useState(null)
   const [speed, setSpeed] = useState(() => sim?.getSpeed() ?? 30)
   const [answer, setAnswer] = useState(null)
@@ -48,14 +51,24 @@ export default function DispatchBoard({ incidents }) {
     setAsking(false)
   }
 
+  /** Reply to a driver's request. Threads under the original by seq so the
+   *  driver's "Your requests" view can nest it. */
+  async function replyTo(seq, truckId, message) {
+    const result = await issueCommand({ type: 'replyDriver', truckId, replyTo: seq, message })
+    if (!result.ok) console.error(result.error || 'Unable to reply to driver')
+  }
+
   const focusCoord = focusId ? world.trucks[focusId]?.coord : null
 
   return (
     <div className="board">
+      <DispatchWorkflow events={events} world={world} incidents={incidents} onFocusTruck={setFocusId} />
       <MapPane
         world={world}
+        events={events}
         incidents={incidents}
         board={board}
+        focusId={focusId}
         focusCoord={focusCoord}
         onSelectTruck={setFocusId}
       />
@@ -120,7 +133,7 @@ export default function DispatchBoard({ incidents }) {
           </div>
         </section>
 
-        <EventFeed events={feed} />
+        <EventFeed events={feed} onReply={replyTo} />
 
         <section className="panel">
           <h2>Road conditions <span className="count">{incidents.length}</span></h2>

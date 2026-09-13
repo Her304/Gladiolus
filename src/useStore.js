@@ -1,4 +1,4 @@
-import { createContext, useContext, useSyncExternalStore } from 'react'
+import { createContext, useContext, useMemo, useSyncExternalStore } from 'react'
 
 /**
  * React binding for the event store. `useSyncExternalStore` reads a version
@@ -33,11 +33,12 @@ export function useFeed(limit = 30) {
 
 /**
  * The raw event log — for projections that need to fold domain events (shipment
- * stops, detention) directly rather than reading the v1 truck world. The list
- * reference is stable per version, so memoization works.
+ * stops, detention) directly rather than reading the v1 truck world. Return a
+ * versioned snapshot: the backing array is deliberately stable, while React
+ * projections need a new identity whenever that array gains events.
  */
 export function useEvents() {
   const store = useStore()
-  useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion)
-  return store.events
+  const version = useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion)
+  return useMemo(() => store.events.slice(), [store, version])
 }

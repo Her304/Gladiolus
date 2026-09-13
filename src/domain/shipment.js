@@ -132,6 +132,7 @@ export function detentionLedgerEntry(stop, rule = DEFAULT_DETENTION_RULE) {
   const iv = chargeableInterval(visit, rule)
   const amount = (calc.roundedMinutes / 60) * rule.ratePerHour
   return {
+    claimId: `CLM-${stop.shipmentId}-${stop.id}`,
     stopId: stop.id,
     shipmentId: stop.shipmentId,
     facilityId: stop.facilityId,
@@ -156,7 +157,11 @@ export function detentionLedgerEntry(stop, rule = DEFAULT_DETENTION_RULE) {
     currency: rule.currency,
     amount: Math.round(amount * 100) / 100,
     excluded: calc.excluded || false,
-    uncertainty: visit.serviceComplete == null ? 'service-complete missing' : null,
+    uncertainty: visit.serviceComplete == null
+      ? 'service-complete missing'
+      : stop.visitEvents.some((e) => e.type === EVENT.STOP_SERVICE_COMPLETED && e.inferred)
+        ? 'service completion inferred from GPS geofence exit; review required'
+        : null,
   }
 }
 
@@ -175,6 +180,30 @@ export function projectShipment(events, shipment, rule = DEFAULT_DETENTION_RULE)
     .filter((s) => s.role === 'delivery')
     .map((s) => detentionLedgerEntry(s, rule))
     .filter(Boolean)
+    .map((entry) => {
+      const calculated = events.findLast((e) => e.type === EVENT.DETENTION_CALCULATED && e.stopId === entry.stopId)
+      const claimId = calculated?.claimId || entry.claimId
+      // The claim state advances through the review chain as detention events
+      // arrive: eligible → calculated → reviewed → adjusted/waived → exported.
+      // `detention.calculated` both carries the computed amount (applied below)
+      // and advances the state from `eligible` to `calculated` (plan §4).
+      const stateByType = {
+        [EVENT.DETENTION_ELIGIBLE]: 'eligible', [EVENT.DETENTION_CALCULATED]: 'calculated',
+        [EVENT.DETENTION_REVIEWED]: 'reviewed', [EVENT.DETENTION_ADJUSTED]: 'adjusted',
+        [EVENT.DETENTION_WAIVED]: 'waived', [EVENT.DETENTION_EXPORTED]: 'exported',
+        [EVENT.DETENTION_RECONCILED]: 'reconciled',
+      }
+      const state = events.filter((e) => e.claimId === claimId && stateByType[e.type])
+        .reduce((_, e) => stateByType[e.type], calculated ? 'calculated' : entry.state)
+      return {
+        ...entry, claimId, state,
+        billableMinutes: calculated?.billableMinutes ?? entry.billableMinutes,
+        roundedMinutes: calculated?.roundedMinutes ?? entry.roundedMinutes,
+        amount: calculated?.amount ?? entry.amount,
+        currency: calculated?.currency ?? entry.currency,
+        uncertainty: calculated?.uncertainty ?? entry.uncertainty,
+      }
+    })
   return {
     ...shipment,
     ledger,

@@ -1,14 +1,12 @@
-import { useMemo, useState, useSyncExternalStore } from 'react'
-import { useWorld } from '../../useStore.js'
-import { SITES, MIN_FENCE_M, offCorridorKm } from '../../data/corridor.js'
+import { useMemo, useState } from 'react'
+import { useEvents, useWorld } from '../../useStore.js'
+import { SITES, MIN_FENCE_M, offCorridorKm, BASE_SITE_CAPACITIES } from '../../data/corridor.js'
 import { pressureFor } from '../../engine/parking.js'
 import { APPROACH_KM } from '../../contract.js'
-import {
-  BASE_SPACES, CAPACITY_RANGE, capacityOf, isOverridden, overrideCount,
-  setCapacity, clearCapacity, resetAll, subscribe, getVersion,
-} from '../../admin/settings.js'
-import { logAdminAction, ACTION } from '../../admin/audit.js'
 import { pct } from '../../format.js'
+import { issueCommand } from '../../services/serverApi.js'
+
+const CAPACITY_RANGE = { min: 1, max: 400 }
 
 /**
  * Corridor configuration. Capacity is editable and live — `pressureFor` reads
@@ -23,46 +21,51 @@ import { pct } from '../../format.js'
  */
 export default function SitesPanel({ user }) {
   const world = useWorld()
-  useSyncExternalStore(subscribe, getVersion, getVersion)
+  const events = useEvents()
   const [drafts, setDrafts] = useState({})
   const [error, setError] = useState(null)
 
   const now = useMemo(() => new Date(world.clock), [world.clock])
+  const capacities = useMemo(() => {
+    const values = { ...BASE_SITE_CAPACITIES }
+    for (const e of events) {
+      if (e.type !== 'config.changed') continue
+      if (e.configKey === 'site.capacity' && e.siteId in values) values[e.siteId] = e.value
+      if (e.configKey === 'site.capacities.reset') Object.assign(values, e.capacities || BASE_SITE_CAPACITIES)
+    }
+    return values
+  }, [events])
+  const overriddenIds = Object.keys(BASE_SITE_CAPACITIES).filter((id) => capacities[id] !== BASE_SITE_CAPACITIES[id])
 
-  function commit(site) {
+  async function commit(site) {
     const raw = drafts[site.id]
     setDrafts((d) => { const next = { ...d }; delete next[site.id]; return next })
     if (raw === undefined || raw === '') return
 
-    const before = capacityOf(site.id)
-    const applied = setCapacity(site.id, raw)
-    if (applied === null) {
+    const applied = Math.round(Number(raw))
+    if (!Number.isFinite(applied)) {
       setError(`"${raw}" is not a capacity. Enter a whole number of spaces.`)
       return
     }
-    setError(
-      applied !== Math.round(Number(raw))
-        ? `Clamped to ${applied} — capacity is bounded to ${CAPACITY_RANGE.min}–${CAPACITY_RANGE.max} spaces.`
-        : null,
-    )
-    if (applied !== before) {
-      logAdminAction(user, ACTION.CAPACITY_SET, `${site.name}: ${before} → ${applied} spaces`)
+    if (applied < CAPACITY_RANGE.min || applied > CAPACITY_RANGE.max) {
+      setError(`Capacity must be ${CAPACITY_RANGE.min}–${CAPACITY_RANGE.max} spaces.`)
+      return
     }
+    const result = await issueCommand({ type: 'setSiteCapacity', siteId: site.id, spaces: applied })
+    setError(result.ok ? null : result.error || 'Capacity update failed.')
   }
 
-  function reset(site) {
-    if (!clearCapacity(site.id)) return
-    setError(null)
-    logAdminAction(user, ACTION.CAPACITY_RESET, `${site.name} back to ${BASE_SPACES[site.id]} spaces`)
+  async function reset(site) {
+    const result = await issueCommand({ type: 'setSiteCapacity', siteId: site.id, spaces: BASE_SITE_CAPACITIES[site.id] })
+    setError(result.ok ? null : result.error || 'Capacity reset failed.')
   }
 
-  function resetEverything() {
-    const n = resetAll()
-    setError(null)
-    if (n) logAdminAction(user, ACTION.OVERRIDES_CLEARED, `${n} site${n === 1 ? '' : 's'} restored`)
+  async function resetEverything() {
+    const result = await issueCommand({ type: 'resetSiteCapacities' })
+    setError(result.ok ? null : result.error || 'Capacity reset failed.')
   }
 
-  const overrides = overrideCount()
+  const overrides = overriddenIds.length
 
   return (
     <>
@@ -86,8 +89,9 @@ export default function SitesPanel({ user }) {
           </thead>
           <tbody>
             {SITES.filter((s) => s.kind === 'parking').map((site) => {
-              const p = pressureFor(site, world, now)
-              const dirty = isOverridden(site.id)
+              const capacity = capacities[site.id]
+              const p = pressureFor({ ...site, spaces: capacity }, world, now)
+              const dirty = capacity !== BASE_SITE_CAPACITIES[site.id]
               return (
                 <tr key={site.id}>
                   <td>
@@ -101,17 +105,17 @@ export default function SitesPanel({ user }) {
                       className="field cell"
                       inputMode="numeric"
                       aria-label={`Capacity at ${site.name}`}
-                      value={drafts[site.id] ?? capacityOf(site.id)}
+                      value={drafts[site.id] ?? capacity}
                       onChange={(e) => setDrafts((d) => ({ ...d, [site.id]: e.target.value }))}
                       onBlur={() => commit(site)}
                       onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
                     />
                   </td>
-                  <td className="num">{dirty ? BASE_SPACES[site.id] : '—'}</td>
+                  <td className="num">{dirty ? BASE_SITE_CAPACITIES[site.id] : '—'}</td>
                   <td className="num">{p.observed}</td>
                   <td>
                     <span className={`pill level-${p.level}`}>{p.level}</span>{' '}
-                    <span className="mono muted">{p.occupied}/{site.spaces} · {pct(p.confidence)} conf</span>
+                    <span className="mono muted">{p.occupied}/{capacity} · {pct(p.confidence)} conf</span>
                   </td>
                   <td className="num">
                     {dirty && <button className="ghost" onClick={() => reset(site)}>Reset</button>}
@@ -125,9 +129,9 @@ export default function SitesPanel({ user }) {
         {error && <p className="err" style={{ marginTop: 10 }}>{error}</p>}
 
         <p className="note" style={{ paddingLeft: 0 }}>
-          Overrides persist to <code>localStorage</code> on this browser only and
-          are applied before the simulator boots. Each change is appended to the
-          event log, so the audit tab and the dispatcher's feed both see it.
+          Capacity changes are admin-authorized server commands. They persist in
+          the shared event log, replay after restart, and reach every connected
+          dispatcher on the same sequence.
         </p>
       </section>
 

@@ -1,0 +1,2 @@
+claimId,shipmentId,stopId,billableMinutes,amount,currency,state
+CLM-1,SHP-1,STP-1,30,37.5,CAD,exported

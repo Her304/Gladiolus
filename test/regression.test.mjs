@@ -16,33 +16,34 @@ import { remaining, clockLeftMs, hosStatus, reachableKm, DRIVE_LIMIT_MS, DUTY_LI
 
 const H = 3600_000
 
-describe('current HOS — the unsafe counterexamples (v1)', () => {
-  test('missing driving/duty fields default to zero → full hours, status ok', () => {
+describe('active HOS — the former counterexamples, now fixed', () => {
+  test('missing driving/duty fields → unresolved, not ok (assessment §6 fixed)', () => {
     // Assessment §6: "Missing driving and duty fields → 13 hours available; status ok."
-    // The bug: unknown history becomes affirmative availability.
+    // FIXED: unknown history is now 'unresolved', not affirmative availability.
     const truck = {} // no drivingMs, no onDutyMs
     const r = remaining(truck)
-    assert.equal(r.driving, DRIVE_LIMIT_MS, 'BUG: missing history yields full 13h driving')
-    assert.equal(r.duty, DUTY_LIMIT_MS, 'BUG: missing history yields full 14h duty')
-    assert.equal(hosStatus(truck), 'ok', 'BUG: unknown HOS is reported as ok, not unresolved')
+    assert.equal(r.driving, null, 'missing history yields null, not 13h')
+    assert.equal(r.duty, null, 'missing history yields null, not 14h')
+    assert.equal(hosStatus(truck), 'unresolved', 'unknown HOS is unresolved, not ok')
+    assert.equal(clockLeftMs(truck), 0, 'unknown HOS yields 0 clock, not 13h')
   })
 
-  test('elapsed/cycle exhaustion is ignored by the two-counter decision', () => {
-    // Assessment §6: "Driving 5h, duty 8h, elapsed 17h, cycle 70h → 6 hours available; status ok."
-    // The two-counter helper has no notion of elapsed window or cycle.
+  test('elapsed/cycle exhaustion still not modeled by the two-counter helper (domain layer blocks it)', () => {
+    // The two-counter helper still has no elapsed/cycle notion — that lives in
+    // domain/feasibility.js (hosFeasibility), which the simulator's pre-movement
+    // guard now uses. Document that the helper alone is insufficient and the
+    // domain layer is the authority.
     const truck = { drivingMs: 5 * H, onDutyMs: 8 * H }
-    // elapsed 17h exceeds the 16h window; cycle 70h is at the Cycle 1 ceiling.
-    // Neither is represented, so the helper still reports hours available.
-    assert.ok(clockLeftMs(truck) > 0, 'BUG: elapsed/cycle exhaustion not modeled')
-    assert.equal(hosStatus(truck), 'ok')
+    assert.ok(clockLeftMs(truck) > 0, 'two-counter helper still reports hours (domain layer blocks on elapsed/cycle)')
+    assert.equal(hosStatus(truck), 'ok', 'helper says ok; domain gateMovement says infeasible')
   })
 
-  test('reachableKm floors speed at 40km/h — optimistic reach in congestion', () => {
+  test('reachableKm no longer floors speed at 40km/h (assessment §6 fixed)', () => {
     // Assessment §6: "Actual speed 10km/h; 1h available → reach calculated as 40km."
+    // FIXED: reach tracks the real speed with no floor.
     const truck = { drivingMs: 12 * H, onDutyMs: 13 * H, speedKph: 10 }
-    // 1h driving left, at 10km/h true reach is 10km. The floor inflates it to 40km.
     const reach = reachableKm(truck)
-    assert.ok(reach >= 40, `BUG: speed floor gives ${reach}km reach at 10km/h (expected ~10km)`)
+    assert.ok(reach < 15, `10km/h truck now gets ~10km reach, not 40km-floored (got ${reach})`)
   })
 })
 

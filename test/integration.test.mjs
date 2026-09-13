@@ -194,7 +194,10 @@ describe('Phase 6 — connected import → assign → export flow', () => {
     const ship = createShipment({ id: shipmentId, kind: 'ftl', stops: [{ id: 'STP-pu', role: 'pickup', facilityId: 'milton' }, { id: stopId, role: 'delivery', facilityId: 'london-dc' }] })
     const proj = projectShipment(events, ship, rule)
     assert.equal(Math.round(proj.ledger[0].billableMinutes), 30)
-    assert.equal(proj.ledger[0].state, 'eligible')
+    // The demonstration emits detention.eligible then detention.calculated, so
+    // the projected claim has advanced to `calculated` (the review chain's next
+    // state after eligible — see the transition assertions below).
+    assert.equal(proj.ledger[0].state, 'calculated')
 
     // 4. Export: the evidence package is exportable with all milestones + contract.
     const entry = proj.ledger[0]

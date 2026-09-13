@@ -23,7 +23,7 @@ export function createIngester(append) {
   let dropped = 0
   let applied = 0
 
-  function ingest(event) {
+  async function ingest(event) {
     const providerId = event.providerId
     if (providerId && seen.has(providerId)) {
       dropped++
@@ -36,7 +36,15 @@ export function createIngester(append) {
       receivedAt: event.receivedAt ?? Date.now(),
       ...event,
     }
-    const result = append(stamped)
+    let result
+    try {
+      result = await append(stamped)
+    } catch (error) {
+      // A failed append was not ingested. Allow the provider's retry instead
+      // of poisoning the process-local dedup set forever.
+      if (providerId) seen.delete(providerId)
+      throw error
+    }
     // The underlying store may return the event directly (in-memory) or a
     // result envelope { ok, event, duplicate } (durable). Unwrap accordingly.
     if (result && typeof result === 'object' && 'ok' in result) {

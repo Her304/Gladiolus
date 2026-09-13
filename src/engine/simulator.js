@@ -8,15 +8,18 @@ import { APPROACH_KM, DWELL_THRESHOLD_MIN } from '../contract.js'
 import { clockLeftMs, RESET_MS } from './hos.js'
 import { recommendParking, pressureFor } from './parking.js'
 import { seedFleet, mulberry32 } from '../data/seed.js'
-import { speedFactorAt } from '../services/on511.js'
+import { speedFactorAt, closureEdges } from '../services/on511.js'
 import { flowFactorAt } from '../services/tomtom.js'
+import { haversine } from './geo.js'
+import { NODES, shortestPath } from '../data/regional-graph.js'
 // v2 domain layer — the simulator now routes its flagged transitions through
 // the authoritative semantics (arrival ≠ delivery, pre-movement HOS guard,
 // load queue instead of random self-assignment, contract-driven detention).
-import { EVENT as V2_EVENT, DEFAULT_DETENTION_RULE } from '../domain/contract.js'
-import { gateMovement } from '../domain/command.js'
+import { EVENT as V2_EVENT, DEFAULT_DETENTION_RULE, VERDICT } from '../domain/contract.js'
+import { gateMovement, rankCandidates } from '../domain/command.js'
 import { calculateDetention, foldVisit } from '../domain/detention.js'
 import { createLoadBoard, createLoad } from '../domain/loadboard.js'
+import { boundedReach } from '../domain/feasibility.js'
 
 /** Sim time between telemetry pings per truck. 40 trucks pinging every tick is
  *  unusable; once every 90 sim seconds keeps the log a manageable size. */
@@ -56,21 +59,100 @@ export function createSimulator(store, { startHour = 14 } = {}) {
   // after a dwell (assessment §8: "Load generation is not load matching"); they
   // draw from this queue, which carries origin, destination, revenue, and
   // equipment so feasibility can be checked before an offer is accepted.
+  //
+  // Backhaul pairing (the brief's financial premise): a delivery load is posted
+  // together with a return load whose origin is the delivery's destination —
+  // Milton→London pairs with London→Kitchener. The return is ready when the
+  // truck arrives. This is what reduces deadhead, not random load invention.
   const loadBoard = createLoadBoard()
   let loadCounter = 9000
-  function postOpenLoad(originId, destinationId, revenue) {
-    const id = `L-${loadCounter++}`
-    loadBoard.postLoad(createLoad({
-      id, shipmentId: `SHP-${id}`, originId, destinationId,
-      readyAt: clock, expiresAt: clock + 4 * 3600_000, revenue,
-    }))
-    return id
-  }
-  // Seed the queue so trucks have real freight to pick up.
+
+  // Map corridor site ids → regional-graph node ids (by coordinate proximity).
+  // The two use different id namespaces; this bridge lets loads carry graph
+  // destinations so shortestPath can route them.
+  const SITE_TO_NODE = new Map()
   for (const s of STOP_SITES) {
-    const dest = STOP_SITES.find((o) => o.id !== s.id)
-    if (dest) postOpenLoad(s.id, dest.id, 800 + Math.floor(rnd() * 600))
+    let best = null, bestD = Infinity
+    for (const n of NODES) {
+      const d = haversine(s.coord, n.coord)
+      if (d < bestD) { bestD = d; best = n }
+    }
+    SITE_TO_NODE.set(s.id, best.id)
   }
+  // Reverse: graph node id → nearest corridor site id.
+  const NODE_TO_SITE = new Map()
+  for (const [siteId, nodeId] of SITE_TO_NODE) {
+    if (!NODE_TO_SITE.has(nodeId) || haversine(SITE_BY_ID[siteId].coord, NODES.find(n => n.id === nodeId).coord) < haversine(SITE_BY_ID[NODE_TO_SITE.get(nodeId)].coord, NODES.find(n => n.id === nodeId).coord)) {
+      NODE_TO_SITE.set(nodeId, siteId)
+    }
+  }
+
+  /**
+   * Find a return destination for a delivery — a graph neighbor of the
+   * delivery's destination node, mapped back to a corridor site. This is the
+   * backhaul: the truck delivers to London, then picks up London→Kitchener.
+   */
+  function returnDestinationFor(deliveryDestSiteId) {
+    const destNode = SITE_TO_NODE.get(deliveryDestSiteId)
+    if (!destNode) return null
+    // Pick a graph destination reachable from destNode (not destNode itself).
+    const candidates = ['kitchener', 'barrie', 'niagara-falls', 'peterborough', 'pickering', 'milton', 'cambridge', 'mississauga', 'scarborough', 'windsor']
+      .filter((id) => id !== destNode)
+      .map((id) => ({ id, path: shortestPath(destNode, id) }))
+      .filter((c) => c.path && c.path.km > 0 && c.path.km < 200)
+    if (!candidates.length) return null
+    const pick = candidates[Math.floor(rnd() * candidates.length)]
+    return { siteId: NODE_TO_SITE.get(pick.id) || pick.id, nodeId: pick.id, km: pick.path.km }
+  }
+
+  /**
+   * Feasibility check for a load candidate: can this truck reach the load's
+   * destination on its remaining HOS? Uses the graph distance (shortestPath)
+   * and boundedReach (no 40km/h floor). Returns a gateAssignment-shaped result
+   * so rankCandidates can filter and rank.
+   */
+  function feasibilityForLoad(load, t) {
+    const destNode = SITE_TO_NODE.get(load.destinationId)
+    const truckNode = SITE_TO_NODE.get(SITE_BY_ID[t.destinationId]?.id || t.insideSiteId) || SITE_TO_NODE.get(SITE_BY_ID[t.destinationId]?.id)
+    const route = (destNode && truckNode) ? shortestPath(truckNode, destNode) : null
+    const distanceKm = route?.km || Math.abs((SITE_BY_ID[load.destinationId]?.chainage || 0) - t.chainage)
+    const duty = { drivingMs: t.drivingMs, onDutyMs: t.onDutyMs, elapsedMs: t.elapsedMs, cycleMs: t.cycleMs, dailyOffDutyMs: t.dailyOffDutyMs, regime: t.regime, observedAt: clock, source: 'simulated' }
+    const reach = boundedReach(duty, t.speedKph || 90)
+    const feasible = reach && reach.km >= distanceKm
+    return {
+      ok: feasible,
+      verdict: feasible ? VERDICT.FEASIBLE : VERDICT.INFEASIBLE,
+      blockers: feasible ? [] : ['hos.driving'],
+      inputs: ['hos', 'route'],
+    }
+  }
+
+  /**
+   * Post a delivery load AND its paired return load. The return's origin is the
+   * delivery's destination; its readyAt is the delivery's ETA. This is the
+   * backhaul pairing that makes the deadhead-reduction premise real.
+   */
+  function postPairedLoads(originSiteId, destSiteId, revenue) {
+    const deliveryId = `L-${loadCounter++}`
+    const eta = clock + 3 * 3600_000 // rough: ready when the truck arrives
+    loadBoard.postLoad(createLoad({
+      id: deliveryId, shipmentId: `SHP-${deliveryId}`, originId: originSiteId, destinationId: destSiteId,
+      readyAt: clock, expiresAt: clock + 6 * 3600_000, revenue,
+    }))
+    // Post the return load (backhaul): dest → a graph neighbor of dest.
+    const ret = returnDestinationFor(destSiteId)
+    if (ret) {
+      const returnId = `L-${loadCounter++}`
+      loadBoard.postLoad(createLoad({
+        id: returnId, shipmentId: `SHP-${returnId}`, originId: destSiteId, destinationId: ret.siteId,
+        readyAt: eta, expiresAt: eta + 6 * 3600_000, revenue: 700 + Math.floor(rnd() * 500),
+      }))
+    }
+    return deliveryId
+  }
+  // Seed the queue with paired loads along the corridor.
+  const seedPairs = [['milton-intermodal', 'london-dc'], ['cambridge-dc', 'london-dc'], ['london-dc', 'milton-intermodal'], ['mississauga-dc', 'cambridge-dc']]
+  for (const [orig, dest] of seedPairs) postPairedLoads(orig, dest, 800 + Math.floor(rnd() * 600))
 
   /**
    * The site this truck is currently heading off the highway for, if any: the
@@ -123,10 +205,18 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       odometerKm: t.odometerKm,
       laden: t.laden,
       loadId: t.loadId,
+      shipmentId: t.shipmentId ?? null,
       destinationId: t.destinationId,
       state: t.state,
       drivingMs: t.drivingMs,
       onDutyMs: t.onDutyMs,
+      elapsedMs: t.elapsedMs,
+      cycleMs: t.cycleMs,
+      dailyOffDutyMs: t.dailyOffDutyMs,
+      regime: t.regime,
+      equipment: t.equipment,
+      tareKg: t.tareKg,
+      grossLimitKg: t.grossLimitKg,
       insideSiteId: t.insideSiteId,
       claimedSiteId: t.claimedSiteId,
       parked: t.state === 'resting',
@@ -135,11 +225,45 @@ export function createSimulator(store, { startHour = 14 } = {}) {
   }
 
   function emitPing(t) {
-    store.append(EVENT.PING, clock, { truckId: t.id, truck: observable(t) })
+    // The ping carries the active shipmentId at the top level so a customer's
+    // shipment-scoped SSE stream can match it. When the truck is empty/
+    // repositioning (no shipment), shipmentId is null — the customer's stream
+    // goes quiet, so their marker holds its last position rather than
+    // following the next load (assessment §8/C11).
+    store.append(EVENT.PING, clock, { truckId: t.id, shipmentId: t.shipmentId ?? null, truck: observable(t) })
     t.lastPingAt = clock
   }
 
+  /**
+   * Pick a destination for an empty truck. Uses the regional graph: find the
+   * nearest graph node to the truck's current position, route to a random
+   * reachable destination, and map back to a corridor site. This replaces the
+   * old 1D bounce (Windsor↔Scarborough) with graph-routed movement — a truck
+   * at London might head to Kitchener, Barrie, or back to Milton.
+   */
   function pickDestination(t) {
+    // Find the nearest graph node to the truck's current corridor site.
+    const truckSite = SITE_BY_ID[t.insideSiteId] || STOP_SITES.find((s) => Math.abs(s.chainage - t.chainage) < 30)
+    const truckNode = truckSite ? SITE_TO_NODE.get(truckSite.id) : null
+    if (truckNode) {
+      // Route to a random graph destination reachable from here.
+      const dests = ['kitchener', 'barrie', 'niagara-falls', 'peterborough', 'pickering', 'milton', 'cambridge', 'mississauga', 'scarborough', 'windsor', 'london']
+        .filter((id) => id !== truckNode)
+        .map((id) => ({ id, path: shortestPath(truckNode, id) }))
+        .filter((c) => c.path && c.path.km > 0 && c.path.km < 250)
+      if (dests.length) {
+        const pick = dests[Math.floor(rnd() * dests.length)]
+        const siteId = NODE_TO_SITE.get(pick.id)
+        if (siteId) {
+          // Set direction based on whether the destination is ahead or behind.
+          const dest = SITE_BY_ID[siteId]
+          if (dest) t.direction = dest.chainage >= t.chainage ? 1 : -1
+          return siteId
+        }
+      }
+    }
+    // Fallback: the old 1D ahead-selection (keeps the sim moving if the graph
+    // has no reachable destination from this position).
     const ahead = STOP_SITES.filter((s) => (s.chainage - t.chainage) * t.direction > 25)
     if (ahead.length) return ahead[Math.floor(rnd() * ahead.length)].id
     t.direction *= -1
@@ -203,7 +327,7 @@ export function createSimulator(store, { startHour = 14 } = {}) {
           // arrival with delivery"). The load stays attached while service and
           // detention evidence accumulate. Delivery is the service-completion
           // milestone, emitted when the dwell expires — not at fence entry.
-          t.stopId = `STP-${tr.site.id}`
+          t.stopId = `STP-${t.id}-${tr.site.id}`
           t.shipmentId = t.shipmentId || `SHP-${t.loadId}`
           store.append(V2_EVENT.SHIPMENT_POSTED, clock, {
             shipmentId: t.shipmentId, kind: 'ftl', stops: [t.lastOriginId || 'STP-pu', t.stopId],
@@ -258,6 +382,8 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       t.odometerKm += km
       t.drivingMs += stepMs
       t.onDutyMs += stepMs
+      t.elapsedMs += stepMs
+      t.cycleMs += stepMs
 
       if (t.chainage <= 1) {
         t.chainage = 1
@@ -323,6 +449,8 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       case 'dwelling': {
         t.dwellLeftMs -= dt
         t.onDutyMs += dt
+        t.elapsedMs += dt
+        t.cycleMs += dt
         if (t.dwellLeftMs <= 0) {
           // Service complete → delivery confirmed (NOT at fence entry). Then
           // gate-out. The load is cleared here, after evidence accumulated.
@@ -358,12 +486,26 @@ export function createSimulator(store, { startHour = 14 } = {}) {
           }
           t.state = 'driving'
           t.destinationId = pickDestination(t)
-          // Draw the next load from the open queue — no random self-assignment
-          // (assessment §8). If the queue is empty, the truck runs empty to its
-          // destination; if a load is available, commit it atomically.
+          // Draw the next load from the open queue — feasibility-ranked, not
+          // random (assessment §8: "Load generation is not load matching"). The
+          // sim offers the top feasible load to the driver, then accepts it.
           const openLoads = loadBoard.openQueue()
           if (openLoads.length) {
-            const load = openLoads[Math.floor(rnd() * Math.min(openLoads.length, 5))]
+            // Feasibility ranking: pick the highest-revenue load the truck can
+            // reach on remaining hours (rankCandidates filters infeasible).
+            const ranked = rankCandidates(openLoads, (load) => feasibilityForLoad(load, t))
+            const load = ranked.feasible[0] || null
+            if (!load) {
+              store.append(V2_EVENT.EXCEPTION_OPENED, clock, {
+                severity: 'warn', affectedTruck: t.id,
+                reason: 'no feasible load candidate',
+                blockers: ranked.exceptions.flatMap((x) => x.blockers || []),
+                deadline: clock + 30 * 60_000,
+              })
+              break
+            }
+            // Offer then accept (the loadBoard requires offered→accepted).
+            loadBoard.offerLoad(load.id, t.driverId, 'sim', clock)
             const accept = loadBoard.acceptOffer(load.id, t.driverId, t.id, `sim-accept-${load.id}-${t.id}`, clock)
             if (accept.ok) {
               t.laden = true
@@ -371,13 +513,18 @@ export function createSimulator(store, { startHour = 14 } = {}) {
               t.shipmentId = load.shipmentId
               t.lastOriginId = t.insideSiteId
               t.destinationId = load.destinationId
+              store.append(V2_EVENT.SHIPMENT_POSTED, clock, {
+                shipmentId: t.shipmentId, kind: 'ftl', stops: [t.lastOriginId || 'STP-pu', t.destinationId],
+                providerId: `sim-post-${t.shipmentId}`,
+              })
               store.append(EVENT.LOAD_ASSIGNED, clock, {
                 truckId: t.id, loadId: t.loadId, siteId: t.insideSiteId,
                 destinationId: t.destinationId, destinationName: SITE_BY_ID[t.destinationId]?.name,
               })
-              // Replenish the queue so it never starves.
-              const dest = STOP_SITES.find((o) => o.id !== load.destinationId)
-              if (dest) postOpenLoad(load.destinationId, dest.id, 800 + Math.floor(rnd() * 600))
+              // Replenish the queue with a paired delivery+return load so the
+              // backhaul pairing continues.
+              const ret = returnDestinationFor(load.destinationId)
+              if (ret) postPairedLoads(load.destinationId, ret.siteId, 800 + Math.floor(rnd() * 600))
             }
           }
         }
@@ -386,10 +533,14 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       }
       case 'resting': {
         t.restLeftMs -= dt
+        t.elapsedMs += dt
+        t.dailyOffDutyMs += dt
         if (t.restLeftMs <= 0) {
           t.state = 'driving'
           t.drivingMs = 0
           t.onDutyMs = 0
+          t.elapsedMs = 0
+          t.dailyOffDutyMs = 10 * 3600_000
           t.claimedSiteId = null
           store.append(EVENT.BREAK_END, clock, {
             truckId: t.id,
@@ -409,7 +560,10 @@ export function createSimulator(store, { startHour = 14 } = {}) {
         // blocked, the truck holds and an exception is opened with a resolution
         // deadline — no movement occurs.
         const guard = gateMovement({
-          truck: { id: t.id, drivingMs: t.drivingMs, onDutyMs: t.onDutyMs, state: t.state },
+          truck: {
+            id: t.id, drivingMs: t.drivingMs, onDutyMs: t.onDutyMs,
+            elapsedMs: t.elapsedMs, cycleMs: t.cycleMs, regime: t.regime, state: t.state,
+          },
           vehicle: { available: !t.majorDefect, reason: t.majorDefect ? 'vehicle.defect' : null },
           route: { impassable: Boolean(t.routeImpassable) },
           assignmentId: t.shipmentId ? `ASN-${t.shipmentId}` : null,
@@ -447,7 +601,16 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       for (const t of trucks.values()) stepTruck(t, dt)
       store.commit()
     },
-    setIncidents: (list) => { incidents = list || [] },
+    setIncidents: (list) => {
+      incidents = list || []
+      // A full mainline closure makes the route edge impassable (assessment §8:
+      // "route remains traversable" was the bug). Trucks whose planned path
+      // crosses a closure edge are blocked at the pre-movement guard.
+      const edges = closureEdges(incidents)
+      for (const t of trucks.values()) {
+        t.routeImpassable = edges.some((e) => Math.abs(e.chainage - t.chainage) < 14)
+      }
+    },
     setFlow: (list) => { flow = list || [] },
     setSpeed: (n) => { speedMultiplier = Math.max(1, Math.min(240, n)) },
     getSpeed: () => speedMultiplier,

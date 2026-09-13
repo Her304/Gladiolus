@@ -1,4 +1,5 @@
 import { EVENT, FEED_TYPES, DWELL_THRESHOLD_MIN, isFeedWorthy } from '../contract.js'
+import { SITE_BY_ID } from '../data/corridor.js'
 
 export { EVENT, FEED_TYPES }
 
@@ -50,6 +51,7 @@ export function applyEvent(world, e) {
     case EVENT.PING: {
       const prev = world.trucks[e.truckId]
       const t = { ...(prev || {}), id: e.truckId, ...e.truck }
+      if (e.shipmentId != null) t.shipmentId = e.shipmentId
       if (prev && typeof prev.odometerKm === 'number') {
         const delta = Math.max(0, t.odometerKm - prev.odometerKm)
         if (t.laden) world.ladenKm += delta
@@ -93,12 +95,16 @@ export function applyEvent(world, e) {
       break
     }
     case EVENT.PARKING_CLAIM: {
+      const t = world.trucks[e.truckId]
+      if (t) t.claimedSiteId = e.siteId
       const s = siteState(world, e.siteId)
       s.claims = s.claims.filter((c) => c.truckId !== e.truckId)
       s.claims.push({ truckId: e.truckId, etaMin: e.etaMin, at: e.at })
       break
     }
     case EVENT.PARKING_RELEASE: {
+      const t = world.trucks[e.truckId]
+      if (t && (!e.siteId || t.claimedSiteId === e.siteId)) t.claimedSiteId = null
       const s = siteState(world, e.siteId)
       s.claims = s.claims.filter((c) => c.truckId !== e.truckId)
       break
@@ -135,10 +141,27 @@ export function applyEvent(world, e) {
       // Unknown types still advance the clock (the line above) and do nothing
       // else, so adding a new event type before any fold knows it is safe.
       const t = e.type || ''
-      if (t.startsWith('shipment.')) {
+      if (t === 'assignment.committed') {
         const s = world.shipments[e.shipmentId] || { status: 'posted', stops: [], assignmentId: null }
-        if (t === 'shipment.posted') { s.status = 'posted'; s.stops = e.stops || [] }
-        else if (t === 'assignment.committed') { s.status = 'assigned'; s.assignmentId = e.assignmentId }
+        s.status = 'assigned'
+        s.assignmentId = e.assignmentId
+        s.truckId = e.truckId
+        s.driverId = e.driverId
+        s.loadId = e.loadId
+        world.shipments[e.shipmentId] = s
+        const truck = world.trucks[e.truckId]
+        if (truck) {
+          truck.loadId = e.loadId || truck.loadId
+          truck.shipmentId = e.shipmentId
+          truck.laden = false
+        }
+      } else if (t.startsWith('shipment.')) {
+        const s = world.shipments[e.shipmentId] || { status: 'posted', stops: [], assignmentId: null }
+        if (t === 'shipment.posted') {
+          s.status = 'posted'; s.stops = e.stops || []
+          s.loadId = e.loadId; s.originId = e.originId; s.destinationId = e.destinationId
+          s.revenue = e.revenue; s.payloadKg = e.payloadKg; s.equipment = e.equipment
+        }
         else if (t === 'shipment.completed') s.status = 'completed'
         else if (t === 'shipment.cancelled') s.status = 'cancelled'
         world.shipments[e.shipmentId] = s
@@ -153,8 +176,13 @@ export function applyEvent(world, e) {
       } else if (t === 'detention.calculated') {
         world.detention.push({
           claimId: e.claimId, shipmentId: e.shipmentId, stopId: e.stopId,
-          ruleId: e.ruleId, billableMinutes: e.billableMinutes, state: 'eligible', at: e.at,
+          ruleId: e.ruleId, billableMinutes: e.billableMinutes, amount: e.amount,
+          currency: e.currency, state: 'calculated', at: e.at,
         })
+      } else if (t.startsWith('detention.')) {
+        const state = t.split('.')[1]
+        const claim = world.detention.findLast((c) => c.claimId === e.claimId)
+        if (claim) claim.state = state
       } else if (t === 'exception.opened') {
         world.exceptions.push({
           id: `EX-${e.seq}`, severity: e.severity, reason: e.reason,
@@ -163,6 +191,14 @@ export function applyEvent(world, e) {
       } else if (t === 'exception.resolved') {
         const ex = world.exceptions.find((x) => x.state !== 'resolved')
         if (ex) { ex.state = 'resolved'; ex.resolution = e.resolution }
+      } else if (t === 'config.changed') {
+        if (e.configKey === 'site.capacity' && SITE_BY_ID[e.siteId]?.kind === 'parking') {
+          SITE_BY_ID[e.siteId].spaces = e.value
+        } else if (e.configKey === 'site.capacities.reset') {
+          for (const [siteId, spaces] of Object.entries(e.capacities || {})) {
+            if (SITE_BY_ID[siteId]?.kind === 'parking') SITE_BY_ID[siteId].spaces = spaces
+          }
+        }
       }
       break
     }

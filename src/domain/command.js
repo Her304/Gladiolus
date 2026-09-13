@@ -65,8 +65,8 @@ export function gateMovement({ truck, vehicle, route, duty, assignmentId, now = 
  * ranked (plan §5 Phase 4). Returns the verdict, blockers, and the inputs used
  * so the decision is explainable.
  */
-export function gateAssignment({ duty, vehicle, route, equipment, weight }) {
-  const feas = assignmentFeasibility({ duty, vehicle, route, equipment, weight })
+export function gateAssignment({ duty, vehicle, route, equipment, weight, assignment, now = Date.now() }) {
+  const feas = assignmentFeasibility({ duty, vehicle, route, equipment, weight, assignment, now })
   return {
     ok: feas.verdict === VERDICT.FEASIBLE,
     verdict: feas.verdict,

@@ -153,6 +153,9 @@ export function dockHosExpiry() {
       // their limits so the pre-movement guard must fire.
       drivingMs: HOS_LIMITS.DRIVING_MS - 5 * MIN,
       onDutyMs: HOS_LIMITS.ON_DUTY_MS - 5 * MIN,
+      elapsedMs: HOS_LIMITS.ELAPSED_WINDOW_MS - 5 * MIN,
+      cycleMs: 30 * H,
+      regime: 'cycle1',
       state: 'dwelling',
       insideSiteId: MILTON_LONDON.facilityId,
     },
@@ -160,7 +163,7 @@ export function dockHosExpiry() {
       { type: EVENT.STOP_ARRIVED, at: arrive, stopId: MILTON_LONDON.deliveryStopId, truckId: MILTON_LONDON.truckId },
       { type: EVENT.STOP_SERVICE_STARTED, at: arrive + 10 * MIN, stopId: MILTON_LONDON.deliveryStopId },
       // 30 min later, duty has expired at the dock.
-      { type: EVENT.DUTY_UPDATED, at: arrive + 30 * MIN, truckId: MILTON_LONDON.truckId, drivingMs: HOS_LIMITS.DRIVING_MS, onDutyMs: HOS_LIMITS.ON_DUTY_MS },
+      { type: EVENT.DUTY_UPDATED, at: arrive + 30 * MIN, truckId: MILTON_LONDON.truckId, drivingMs: HOS_LIMITS.DRIVING_MS, onDutyMs: HOS_LIMITS.ON_DUTY_MS, elapsedMs: HOS_LIMITS.ELAPSED_WINDOW_MS, cycleMs: 30 * H, regime: 'cycle1' },
     ],
     expect: { blocksMovement: true },
   }

@@ -23,7 +23,7 @@ const TICK_MS = 500
  * @param {number} [opts.startHour]
  * @param {number} [opts.speed]
  */
-export function createSimService({ ingest, startHour = 14, speed = 30 } = {}) {
+export function createSimService({ ingest, startHour = 14, speed = 30, onTick } = {}) {
   if (typeof ingest !== 'function') throw new Error('createSimService requires an ingest sink')
   // An internal store the simulator writes to; we tee each appended event into
   // the ingestion sink so the durable log and the sim's own fold stay aligned.
@@ -51,6 +51,10 @@ export function createSimService({ ingest, startHour = 14, speed = 30 } = {}) {
       source: 'simulated',
       payload,
       ...payload,
+    }).catch((err) => {
+      // Fire-and-forget ingestion: the sim keeps ticking. A failed ingest (e.g.
+      // a duplicate provider id) is expected and must not crash the sim loop.
+      if (!String(err?.message || '').includes('UNIQUE')) console.error('sim ingest failed:', err?.message)
     })
     return e
   }
@@ -63,6 +67,10 @@ export function createSimService({ ingest, startHour = 14, speed = 30 } = {}) {
   function tick() {
     sim.advance(TICK_MS)
     tickCount++
+    // Notify SSE subscribers that new events are available. Without this the
+    // browser's driver portal sits on "Waiting for the first telemetry update"
+    // forever — the sim writes events but the stream never pushes them.
+    if (typeof onTick === 'function') onTick()
   }
 
   return {

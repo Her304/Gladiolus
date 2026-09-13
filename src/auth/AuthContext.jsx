@@ -1,49 +1,43 @@
-import { createContext, useContext, useMemo, useState } from 'react'
-import { SEED_USERS } from '../data/seed.js'
+import { createContext, useContext, useMemo, useState, useEffect } from 'react'
+import { SERVER_ENABLED, apiUrl } from '../services/serverConfig.js'
 
 /**
- * Seeded auth. PINs and passwords are compared in the browser against a list
- * bundled into the app, and the customer "signature" is not a signature.
+ * Server-enforced auth (Phase B).
  *
- * This is deliberate and scoped to the prototype, not an oversight — say so
- * plainly if a judge asks. Nothing here should survive contact with production.
+ * Sign-in is no longer a browser-side comparison against a bundled SEED_USERS
+ * list with plaintext passwords. It calls POST /api/auth/login; the server
+ * verifies the scrypt-hashed password and returns a signed HMAC token. The
+ * token is stored (not the user object) and the user is derived from
+ * GET /api/session. SEED_USERS is no longer imported into the browser bundle.
+ *
+ * Customer tracking links are signed server-side too: POST /api/tracking/:ship
+ * mints a shipment-scoped grant. readCustomerToken stays here as a display-only
+ * reader (it decodes the payload for the customer view; the server validates the
+ * signature on the stream).
  */
 const AuthCtx = createContext(null)
 
-const SESSION_KEY = 'corridor.session'
-
+const TOKEN_KEY = 'corridor.token'
 /** Staff see the board; admins see the board and the console above it. */
 export const isStaff = (u) => u?.role === 'dispatch' || u?.role === 'admin'
 export const isAdmin = (u) => u?.role === 'admin'
 
-/**
- * A customer tracking link is shipment-scoped, expiring, and revocable
- * (assessment §8/C11: the old token was unsigned base64 and followed the truck's
- * current destination, so a reassignment could expose the next customer's
- * shipment). The grant binds to ONE shipmentId; the truck's next load never
- * leaks through it. In the browser-only fallback the grant is encoded (labelled
- * prototype); the server path signs it with an HMAC (server/app.js mintToken).
- */
-const CUSTOMER_TTL_MS = 72 * 3600_000
-
-export function makeCustomerToken(loadId, truckId, shipmentId) {
-  const payload = {
-    loadId, truckId,
-    shipmentId: shipmentId || (loadId ? `SHP-${loadId}` : null),
-    scope: 'shipment',
-    exp: Date.now() + CUSTOMER_TTL_MS,
-  }
-  return `grant.${btoa(JSON.stringify(payload)).replace(/=+$/, '')}`
+/** The stored signed token (for command/stream requests). */
+export function getToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
 }
 
+/**
+ * Read a customer tracking grant's payload for DISPLAY ONLY. The server
+ * validates the signature; this just decodes it so the customer view can show
+ * the shipment id. A missing/expired grant reads as null/expired.
+ */
 export function readCustomerToken(token) {
   try {
-    if (!token || !token.startsWith('grant.')) {
-      // Legacy unsigned token — reject rather than silently honoring it, so an
-      // old link cannot follow a truck's next destination after reassignment.
-      return null
-    }
-    const parsed = JSON.parse(atob(token.slice(6)))
+    if (!token || !token.includes('.')) return null
+    const [b64] = token.split('.')
+    const padded = b64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(b64.length / 4) * 4, '=')
+    const parsed = JSON.parse(atob(padded))
     if (!parsed?.shipmentId) return null
     if (parsed.exp && Date.now() > parsed.exp) return { expired: true, shipmentId: parsed.shipmentId }
     return parsed
@@ -52,79 +46,72 @@ export function readCustomerToken(token) {
   }
 }
 
-function restore() {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY)
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    // Private windows and blocked site data both throw here.
-    return null
-  }
+/**
+ * Mint a customer tracking link via the server (dispatch/admin only). The
+ * browser never signs; the server returns the signed, shipment-scoped grant.
+ */
+export async function makeCustomerToken(shipmentId) {
+  const res = await fetch(apiUrl(`/api/tracking/${encodeURIComponent(shipmentId)}`), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${getToken()}` },
+  })
+  const r = await res.json()
+  return r.ok ? r.token : null
 }
 
-function persist(user) {
-  try {
-    if (user) localStorage.setItem(SESSION_KEY, JSON.stringify(user))
-    else localStorage.removeItem(SESSION_KEY)
-  } catch {
-    /* non-fatal: the session simply does not survive a reload */
-  }
+function restoreToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || '' } catch { return '' }
 }
 
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(restore)
+export function AuthProvider({ children, onAuthenticated }) {
+  const [user, setUser] = useState(null)
+  const [ready, setReady] = useState(false)
 
-  /** Email-and-password roles differ only in which role they will accept. */
-  function matchByEmail(role, email, password) {
-    return SEED_USERS.find(
-      (u) => u.role === role &&
-        u.email.toLowerCase() === String(email).trim().toLowerCase() &&
-        u.password === password,
-    )
+  // On mount, if a token is stored, validate it against the server to restore
+  // the session. In dev with no server, this no-ops (user stays null → sign-in).
+  useEffect(() => {
+    const token = restoreToken()
+    if (!token || !SERVER_ENABLED) { setReady(true); return }
+    fetch(apiUrl('/api/session'), { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.ok ? r.json() : null)
+      .then((r) => { if (r?.user) { setUser(r.user); onAuthenticated?.() } })
+      .catch(() => {})
+      .finally(() => setReady(true))
+  }, [])
+
+  async function login(email, password) {
+    if (!SERVER_ENABLED) return { ok: false, error: 'Start the shared server to sign in.' }
+    const res = await fetch(apiUrl('/api/auth/login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    })
+    const r = await res.json()
+    if (!r.ok) return { ok: false, error: r.error || 'Login failed.' }
+    try { localStorage.setItem(TOKEN_KEY, r.token) } catch { /* non-fatal */ }
+    setUser(r.user)
+    // Reconnect the SSE stream now that a token exists.
+    onAuthenticated?.()
+    return { ok: true }
   }
 
   const value = useMemo(
     () => ({
       user,
-      /** Drivers sign in with a truck number and a four-digit PIN. */
-      signInDriver(truckId, pin) {
-        const found = SEED_USERS.find(
-          (u) => u.role === 'driver' &&
-            u.truckId.toLowerCase() === String(truckId).trim().toLowerCase() &&
-            u.pin === String(pin).trim(),
-        )
-        if (!found) return { ok: false, error: 'Unknown truck number or PIN.' }
-        setUser(found)
-        persist(found)
-        return { ok: true }
+      ready,
+      /** Drivers sign in with truck number + PIN (mapped to an email-shaped
+       *  account at seed time: <truckId>@carrier.local). */
+      async signInDriver(truckId, pin) {
+        return login(`${String(truckId).trim().toLowerCase()}@carrier.local`, String(pin).trim())
       },
-      /** Dispatchers use email and password. */
-      signInDispatch(email, password) {
-        const found = matchByEmail('dispatch', email, password)
-        if (!found) return { ok: false, error: 'Those credentials do not match.' }
-        setUser(found)
-        persist(found)
-        return { ok: true }
-      },
-      /**
-       * Administrators, same as dispatch with a different role. Worth being
-       * blunt: this is a client-side equality check against a bundled list, so
-       * the admin console is gated by an `if` that anyone can edit in devtools.
-       * A real console needs the role decided by a server that holds the data.
-       */
-      signInAdmin(email, password) {
-        const found = matchByEmail('admin', email, password)
-        if (!found) return { ok: false, error: 'Those credentials do not match.' }
-        setUser(found)
-        persist(found)
-        return { ok: true }
-      },
+      async signInDispatch(email, password) { return login(email, password) },
+      async signInAdmin(email, password) { return login(email, password) },
       signOut() {
+        try { localStorage.removeItem(TOKEN_KEY) } catch { /* non-fatal */ }
         setUser(null)
-        persist(null)
       },
     }),
-    [user],
+    [user, ready],
   )
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>

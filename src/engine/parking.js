@@ -63,7 +63,15 @@ export function projectedArrivals(site, trucks, horizonMin = 90) {
 
 export function pressureFor(site, world, date) {
   const state = world.sites[site.id] || { occupants: [], claims: [] }
-  const observed = state.occupants.length
+  // Assessment §7: "The estimator counts all recorded geofence occupants,
+  // including passing trucks, rather than only confirmed parked vehicles."
+  // Exclude occupants that are still driving (passing through the fence) — only
+  // trucks actually parked/resting/dwelling here count toward occupancy.
+  const parkedOccupants = state.occupants.filter((id) => {
+    const t = world.trucks[id]
+    return t && t.state !== 'driving'
+  })
+  const observed = parkedOccupants.length
   const claims = state.claims.length
   const inbound = projectedArrivals(site, world.trucks)
   const historical = historicalUtilisation(site, date)
@@ -84,7 +92,12 @@ export function pressureFor(site, world, date) {
   const occupied = Math.round(Math.max(observed, Math.min(site.spaces, blended)))
   const estimatedUtil = occupied / site.spaces
   const free = site.spaces - occupied
-  const projectedFree = Math.max(0, free - claims - inbound.length)
+  // Assessment §7: "One claimed inbound truck is also counted both as a claim
+  // and as projected demand." A truck that has already claimed this site is in
+  // `claims`; don't also subtract it from `inbound`. Dedupe by truck id.
+  const claimTruckIds = new Set(state.claims.map((c) => c.truckId))
+  const netInbound = inbound.filter((t) => !claimTruckIds.has(t.truckId))
+  const projectedFree = Math.max(0, free - claims - netInbound.length)
 
   let level = 'open'
   if (projectedFree === 0) level = 'full'
@@ -95,7 +108,7 @@ export function pressureFor(site, world, date) {
     site,
     observed,
     claims,
-    inbound,
+    inbound: netInbound,
     historical,
     confidence,
     estimatedUtil,

@@ -124,11 +124,9 @@ export default function AuditPanel({ user }) {
       </section>
 
       <div className="banner" style={{ marginTop: 16 }}>
-        <strong>This log is in memory only.</strong> It starts empty on every
-        reload and is never written anywhere, so the audit trail above survives
-        exactly as long as the tab does. An audit trail the administrator being
-        audited can clear by pressing F5 is a demonstration of the shape, not a
-        control.
+        <strong>Durable, append-only history.</strong> Connected sessions replay
+        this log from the server after a reload; the browser only holds the
+        current read projection.
       </div>
     </>
   )

@@ -50,6 +50,7 @@ export function createLoad(o) {
     status: 'open',
     offeredTo: null,
     acceptedBy: null,
+    acceptedTruckId: null,
     holdReason: null,
   }
 }
@@ -142,6 +143,7 @@ export function createLoadBoard() {
 
     load.status = 'assigned'
     load.acceptedBy = driverId
+    load.acceptedTruckId = truckId
     auditLine(`driver:${driverId}`, 'load.accepted', loadId)
     return {
       ok: true,
@@ -179,6 +181,7 @@ export function createLoadBoard() {
       })
     }
     load.acceptedBy = newDriverId
+    load.acceptedTruckId = newTruckId
     auditLine(actor, 'load.reassigned', `${loadId} → ${newDriverId}: ${reason}`)
     return {
       ok: true, load,

@@ -111,6 +111,7 @@ export const EVENT = Object.freeze({
   // Audit / correction
   CORRECTION_RECORDED: 'correction.recorded',
   CONFIG_CHANGED: 'config.changed',
+  ADMIN_ACTION: 'admin.action',
 })
 
 /**
@@ -137,6 +138,7 @@ export const BLOCKER = Object.freeze({
   ROUTE_UNKNOWN: 'route.unknown',
   EQUIPMENT: 'equipment',
   WEIGHT: 'weight',
+  WEIGHT_UNKNOWN: 'weight.unknown',
   APPOINTMENT: 'appointment',
   DUPLICATE: 'duplicate',
   CONFLICT: 'conflict',

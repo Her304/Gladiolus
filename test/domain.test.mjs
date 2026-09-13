@@ -255,12 +255,12 @@ describe('bounded reach — no optimistic speed floor', () => {
 })
 
 describe('idempotent ingestion', () => {
-  test('duplicate provider id does not create a second visit', () => {
+  test('duplicate provider id does not create a second visit', async () => {
     const f = duplicateEvent()
     const log = []
     const ingester = createIngester((e) => { log.push(e); return e })
-    const r1 = ingester.ingest(f.events[0])
-    const r2 = ingester.ingest(f.events[1])
+    const r1 = await ingester.ingest(f.events[0])
+    const r2 = await ingester.ingest(f.events[1])
     assert.equal(r1.ok, true)
     assert.equal(r2.ok, false)
     assert.equal(r2.duplicate, true)

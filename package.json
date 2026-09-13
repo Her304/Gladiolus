@@ -4,20 +4,26 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
+    "dev:client": "vite",
+    "dev:server": "node scripts/start-server.mjs",
     "server": "node scripts/start-server.mjs",
+    "start": "node scripts/start-server.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test \"test/**/*.test.mjs\"",
     "test:domain": "node --test test/domain.test.mjs",
-    "smoke": "node scripts/smoke.mjs && node scripts/driver-smoke.mjs"
+    "smoke": "node scripts/smoke.mjs && node scripts/driver-smoke.mjs",
+    "proof": "node --test test/system-boundaries.test.mjs"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
+    "pg": "^8.23.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-leaflet": "^5.0.0",
-    "recharts": "^2.15.0"
+    "recharts": "^2.15.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@musistudio/claude-code-router": "^3.1.0",

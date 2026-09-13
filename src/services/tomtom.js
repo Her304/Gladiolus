@@ -1,14 +1,15 @@
 import { CORRIDOR } from '../data/corridor.js'
 import { positionAt } from '../engine/geo.js'
+import { SERVER_ENABLED, apiUrl } from './serverConfig.js'
 
 /**
- * TomTom flow segment data: live speed against free-flow speed for a point.
- * The free tier allows 2,500 non-tile requests a day, so we sample eight fixed
- * points along the corridor rather than querying per truck, and cache for three
- * minutes. Eight points every three minutes is roughly 1,280 calls a day —
- * comfortably inside the ceiling, with room for a second demo run.
+ * TomTom flow data (Phase C): the key lives on the server. The browser calls the
+ * server proxy (/api/traffic/flow), which samples the fixed corridor points and
+ * forwards to TomTom with the server-side key. Caches for three minutes.
+ *
+ * getToken is imported lazily inside fetchFlow so the simulator (which imports
+ * flowFactorAt) doesn't pull in the React AuthContext (.jsx).
  */
-const KEY = import.meta.env?.VITE_TOMTOM_KEY
 const TTL_MS = 3 * 60_000
 const SAMPLE_COUNT = 8
 
@@ -30,26 +31,26 @@ export const INITIAL_FLOW = FALLBACK
 
 export async function fetchFlow({ force = false } = {}) {
   const now = Date.now()
-  if (!KEY) return { ...cache, source: 'cached', reason: 'no VITE_TOMTOM_KEY' }
+  if (!SERVER_ENABLED) return { ...cache, source: 'cached', reason: 'no server (local sim)' }
   if (!force && now - cache.at < TTL_MS && cache.source === 'live') return cache
-
+  const { getToken } = await import('../auth/AuthContext.jsx')
   try {
-    const data = await Promise.all(
-      SAMPLES.map(async (s) => {
-        const url =
-          'https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json' +
-          `?point=${s.coord[0]},${s.coord[1]}&unit=KMPH&key=${KEY}`
-        const res = await fetch(url, { signal: AbortSignal.timeout(6000) })
-        if (!res.ok) throw new Error(`TomTom responded ${res.status}`)
-        const json = await res.json()
-        return {
-          km: s.km,
-          currentSpeed: json?.flowSegmentData?.currentSpeed ?? 100,
-          freeFlowSpeed: json?.flowSegmentData?.freeFlowSpeed ?? 100,
-        }
-      }),
-    )
-    cache = { at: now, data, source: 'live' }
+    const res = await fetch(apiUrl('/api/traffic/flow'), {
+      headers: { Authorization: `Bearer ${getToken()}` },
+      signal: AbortSignal.timeout(6000),
+    })
+    if (!res.ok) throw new Error(`server responded ${res.status}`)
+    const r = await res.json()
+    // The server returns sample points; map them onto our chainage SAMPLES.
+    const data = r.data && r.data.length ? SAMPLES.map((s, i) => {
+      const f = r.data[i]
+      return {
+        km: s.km,
+        currentSpeed: Number(f?.currentSpeed) || FALLBACK[i].currentSpeed,
+        freeFlowSpeed: Number(f?.freeFlowSpeed) || FALLBACK[i].freeFlowSpeed,
+      }
+    }) : FALLBACK
+    cache = { at: now, data: r.source === 'live' ? data : FALLBACK, source: r.source || 'cached' }
   } catch (err) {
     cache = { at: now, data: FALLBACK, source: 'cached', error: String(err) }
   }

@@ -22,7 +22,7 @@ const MIN = 60_000
  * @param {object} [assignment] planned travel/service/rest in ms
  * @returns {{verdict:FeasibilityVerdict, blockers:string[], drivingLeftMs?:number, dutyLeftMs?:number, elapsedLeftMs?:number, cycleLeftMs?:number}}
  */
-export function hosFeasibility(duty, assignment = {}, now = Date.now()) {
+export function hosFeasibility(duty, assignment = {}, now) {
   const blockers = []
 
   // Unknown is not safe. No duty snapshot at all → unresolved.
@@ -30,10 +30,14 @@ export function hosFeasibility(duty, assignment = {}, now = Date.now()) {
     return { verdict: VERDICT.UNRESOLVED, blockers: [BLOCKER.HOS_UNKNOWN] }
   }
 
-  // Freshness: stale HOS is unresolved, not a violation, not feasible.
+  // Freshness: stale HOS is unresolved, not a violation, not feasible. When no
+  // evaluation time is given, judge the snapshot as of its own observation time
+  // — a duty with a known observedAt is not stale simply because the wall clock
+  // moved on. Callers that want wall-clock freshness pass `now` explicitly.
   const staleAfterMs = 15 * MIN
   const observedAt = duty.observedAt ?? duty.receivedAt
-  if (observedAt == null || now - observedAt > staleAfterMs) {
+  const evalAt = now ?? observedAt
+  if (observedAt == null || (evalAt != null && evalAt - observedAt > staleAfterMs)) {
     return { verdict: VERDICT.UNRESOLVED, blockers: [BLOCKER.HOS_STALE] }
   }
 
@@ -42,7 +46,8 @@ export function hosFeasibility(duty, assignment = {}, now = Date.now()) {
     typeof duty.drivingMs === 'number' &&
     typeof duty.onDutyMs === 'number' &&
     typeof duty.elapsedMs === 'number' &&
-    typeof duty.cycleMs === 'number'
+    typeof duty.cycleMs === 'number' &&
+    typeof duty.dailyOffDutyMs === 'number'
   if (!hasHistory) {
     return { verdict: VERDICT.UNRESOLVED, blockers: [BLOCKER.HOS_UNKNOWN] }
   }
@@ -60,7 +65,7 @@ export function hosFeasibility(duty, assignment = {}, now = Date.now()) {
   if (elapsedLeft - planElapsed <= 0) blockers.push(BLOCKER.HOS_ELAPSED)
 
   // Daily off-duty requirement.
-  if (typeof duty.dailyOffDutyMs === 'number' && duty.dailyOffDutyMs < HOS_LIMITS.DAILY_OFF_DUTY_MS) {
+  if (duty.dailyOffDutyMs < HOS_LIMITS.DAILY_OFF_DUTY_MS) {
     blockers.push(BLOCKER.HOS_DAILY_OFF_DUTY)
   }
 
@@ -97,11 +102,22 @@ export function movementGuard(truck, vehicle, route) {
     return { blocked: true, reason: BLOCKER.VEHICLE_UNKNOWN }
   }
 
+  // The full supported clock is required for a movement clearance. Missing
+  // elapsed/cycle history must not silently fall back to the old two-counter
+  // model.
+  if (![truck.drivingMs, truck.onDutyMs, truck.elapsedMs, truck.cycleMs].every(Number.isFinite)) {
+    return { blocked: true, reason: BLOCKER.HOS_UNKNOWN }
+  }
   // HOS: would this movement begin past a limit?
-  const drivingLeft = HOS_LIMITS.DRIVING_MS - (truck.drivingMs || 0)
-  const dutyLeft = HOS_LIMITS.ON_DUTY_MS - (truck.onDutyMs || 0)
+  const drivingLeft = HOS_LIMITS.DRIVING_MS - truck.drivingMs
+  const dutyLeft = HOS_LIMITS.ON_DUTY_MS - truck.onDutyMs
   if (drivingLeft <= 0) return { blocked: true, reason: BLOCKER.HOS_DRIVING }
   if (dutyLeft <= 0) return { blocked: true, reason: BLOCKER.HOS_DUTY }
+  if (HOS_LIMITS.ELAPSED_WINDOW_MS - truck.elapsedMs <= 0) {
+    return { blocked: true, reason: BLOCKER.HOS_ELAPSED }
+  }
+  const cycle = HOS_CYCLES[truck.regime] || HOS_CYCLES.cycle1
+  if (cycle.hours * 3600_000 - truck.cycleMs <= 0) return { blocked: true, reason: BLOCKER.HOS_CYCLE }
 
   // Impassable route edge (full mainline closure).
   if (route && route.impassable) {
@@ -140,12 +156,12 @@ export function routeFeasibility(route) {
  *
  * @returns {{verdict:FeasibilityVerdict, blockers:string[], confidence?:number, inputs:string[]}}
  */
-export function assignmentFeasibility({ duty, vehicle, route, equipment, weight }) {
+export function assignmentFeasibility({ duty, vehicle, route, equipment, weight, assignment, now = Date.now() }) {
   const blockers = []
   const inputs = []
   let unresolved = false
 
-  const hos = hosFeasibility(duty)
+  const hos = hosFeasibility(duty, assignment, now)
   inputs.push('hos')
   if (hos.verdict === VERDICT.UNRESOLVED) unresolved = true
   blockers.push(...hos.blockers)
@@ -158,15 +174,28 @@ export function assignmentFeasibility({ duty, vehicle, route, equipment, weight 
   }
   inputs.push('vehicle')
 
-  const rt = routeFeasibility(route)
-  if (rt.impassable) blockers.push(rt.reason)
+  if (!route || route.known === false) {
+    unresolved = true
+    blockers.push(BLOCKER.ROUTE_UNKNOWN)
+  } else {
+    const rt = routeFeasibility(route)
+    if (rt.impassable) blockers.push(rt.reason)
+  }
   inputs.push('route')
 
   if (equipment && equipment.required && !equipment.satisfied) {
     blockers.push(BLOCKER.EQUIPMENT)
   }
-  if (weight && weight.overload) {
-    blockers.push(BLOCKER.WEIGHT)
+  // Weight is optional: a load with no payload, or a caller that hasn't run a
+  // weight check, is not blocked on weight. Only an explicit overload (or an
+  // explicit unresolved weight verdict) blocks the assignment.
+  if (weight) {
+    if (weight.verdict === VERDICT.UNRESOLVED) {
+      unresolved = true
+      blockers.push(...(weight.blockers || [BLOCKER.WEIGHT_UNKNOWN]))
+    } else if (weight.overload) {
+      blockers.push(BLOCKER.WEIGHT)
+    }
   }
 
   if (unresolved) return { verdict: VERDICT.UNRESOLVED, blockers, inputs }
