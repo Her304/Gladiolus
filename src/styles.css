@@ -121,26 +121,6 @@ a { color: var(--accent); }
 .owned-exception { display: grid; gap: 4px; border-left: 2px solid var(--crit); padding: 8px 0 8px 10px; margin-top: 8px; }
 .owned-exception span { color: var(--muted); font-size: 11px; }
 .owned-exception div { display: flex; gap: 6px; }
-
-/* Assignment request card — the one driver/route a dispatcher acts on once a
-   load is assigned. Mirrors the load-card surface but gathers the driver's
-   hours, log, road ahead, and the customer/driver contact actions in one place. */
-.request-card { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px; margin-top: 4px; }
-.request-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.request-head .candidate-focus b { font-size: 14px; }
-.request-link { padding: 6px 10px; font-size: 12px; flex-shrink: 0; }
-.request-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
-.request-label { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
-.request-block { display: grid; gap: 6px; margin-top: 12px; }
-.request-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
-.request-log li { display: flex; align-items: baseline; gap: 8px; font-size: 12px; min-width: 0; }
-.request-log time { font-family: var(--mono); color: var(--muted); font-size: 11px; flex-shrink: 0; }
-.request-log small { color: var(--muted); }
-.request-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--warn); }
-.request-badge.closure { color: var(--crit); }
-.request-reply { display: flex; gap: 6px; }
-.request-reply input { flex: 1; min-width: 0; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
-.request-reply input::placeholder { color: var(--muted); }
 .rail {
   width: 370px;
   border-left: 1px solid var(--line);
@@ -148,6 +128,52 @@ a { color: var(--accent); }
   overflow-y: auto;
   flex-shrink: 0;
 }
+
+/* ---------- task cards (right rail) ---------- */
+
+/* The rail's compact task list: one card per active assignment. Compact by
+   default — driver, origin → destination, hours of service — and a Details
+   button that expands it into the full assignment view while isolating the
+   centre map on that one driver. */
+.task-list .task-card {
+  margin: 0 10px 8px;
+  padding: 10px 11px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.task-list .task-card.expanded {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.task-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.task-identity { display: grid; gap: 2px; text-align: left; background: none; border: 0; padding: 0; min-width: 0; }
+.task-identity b { font-size: 13px; }
+.task-identity small { color: var(--muted); font-size: 11px; }
+.task-route {
+  display: flex; align-items: center; gap: 6px; margin-top: 8px;
+  font-size: 12px; color: var(--text); min-width: 0;
+}
+.task-route > span:first-child,
+.task-route > span:last-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.task-arrow { color: var(--accent); flex-shrink: 0; }
+.task-actions { margin-top: 8px; }
+.task-detail { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 12px; }
+.task-section { display: grid; gap: 5px; }
+.task-label { font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); }
+.task-link { padding: 6px 10px; font-size: 12px; width: fit-content; }
+.task-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.task-log li { display: flex; align-items: baseline; gap: 8px; font-size: 12px; min-width: 0; }
+.task-log time { font-family: var(--mono); color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.task-log small { color: var(--muted); }
+.task-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--warn); }
+.task-badge.closure { color: var(--crit); }
+.task-reply { display: flex; gap: 6px; }
+.task-reply input { flex: 1; min-width: 0; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; }
+.task-reply input::placeholder { color: var(--muted); }
+.task-message { border-left: 3px solid var(--accent); background: var(--panel-2); padding: 8px 10px; font-size: 12px; }
 
 .page { flex: 1; overflow-y: auto; padding: 18px; }
 .page-narrow { max-width: 900px; margin: 0 auto; }

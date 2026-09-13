@@ -10,7 +10,7 @@ import { recommendParking, pressureFor } from './parking.js'
 import { seedFleet, mulberry32 } from '../data/seed.js'
 import { speedFactorAt, closureEdges } from '../services/on511.js'
 import { flowFactorAt } from '../services/tomtom.js'
-import { haversine } from './geo.js'
+import { haversine, deadheadKm } from './geo.js'
 import { NODES, shortestPath } from '../data/regional-graph.js'
 // v2 domain layer — the simulator now routes its flagged transitions through
 // the authoritative semantics (arrival ≠ delivery, pre-movement HOS guard,
@@ -110,12 +110,18 @@ export function createSimulator(store, { startHour = 14 } = {}) {
    * destination on its remaining HOS? Uses the graph distance (shortestPath)
    * and boundedReach (no 40km/h floor). Returns a gateAssignment-shaped result
    * so rankCandidates can filter and rank.
+   *
+   * The deadhead leg (truck's current position → load origin) is added to the
+   * driving distance the truck must cover, so HOS reach has to cover the empty
+   * drive to pickup plus the laden leg — not just the laden leg (plan: budget
+   * deadhead against HOS).
    */
   function feasibilityForLoad(load, t) {
     const destNode = SITE_TO_NODE.get(load.destinationId)
     const truckNode = SITE_TO_NODE.get(SITE_BY_ID[t.destinationId]?.id || t.insideSiteId) || SITE_TO_NODE.get(SITE_BY_ID[t.destinationId]?.id)
     const route = (destNode && truckNode) ? shortestPath(truckNode, destNode) : null
-    const distanceKm = route?.km || Math.abs((SITE_BY_ID[load.destinationId]?.chainage || 0) - t.chainage)
+    const deadhead = deadheadKm(t, SITE_BY_ID[load.originId]) ?? 0
+    const distanceKm = (route?.km || Math.abs((SITE_BY_ID[load.destinationId]?.chainage || 0) - t.chainage)) + deadhead
     const duty = { drivingMs: t.drivingMs, onDutyMs: t.onDutyMs, elapsedMs: t.elapsedMs, cycleMs: t.cycleMs, dailyOffDutyMs: t.dailyOffDutyMs, regime: t.regime, observedAt: clock, source: 'simulated' }
     const reach = boundedReach(duty, t.speedKph || 90)
     const feasible = reach && reach.km >= distanceKm
@@ -491,9 +497,14 @@ export function createSimulator(store, { startHour = 14 } = {}) {
           // sim offers the top feasible load to the driver, then accepts it.
           const openLoads = loadBoard.openQueue()
           if (openLoads.length) {
-            // Feasibility ranking: pick the highest-revenue load the truck can
-            // reach on remaining hours (rankCandidates filters infeasible).
-            const ranked = rankCandidates(openLoads, (load) => feasibilityForLoad(load, t))
+            // Deadhead-aware ranking: among feasible loads, pick the one whose
+            // origin is nearest the truck (least empty running), breaking ties
+            // by revenue. rankCandidates still filters infeasible first.
+            const ranked = rankCandidates(
+              openLoads,
+              (load) => feasibilityForLoad(load, t),
+              { positionFor: (load) => deadheadKm(t, SITE_BY_ID[load.originId]) },
+            )
             const load = ranked.feasible[0] || null
             if (!load) {
               store.append(V2_EVENT.EXCEPTION_OPENED, clock, {
@@ -596,10 +607,13 @@ export function createSimulator(store, { startHour = 14 } = {}) {
       store.commit()
     },
     advance(realDtMs) {
+      const eventCount = store.events.length
       const dt = realDtMs * speedMultiplier
       clock += dt
       for (const t of trucks.values()) stepTruck(t, dt)
-      store.commit()
+      // Most 500 ms physics steps do not emit observable telemetry. Avoid
+      // publishing an identical world and rerendering every React surface.
+      if (store.events.length !== eventCount) store.commit()
     },
     setIncidents: (list) => {
       incidents = list || []

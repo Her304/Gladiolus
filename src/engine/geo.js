@@ -87,3 +87,18 @@ export function chainageOf(path, coord, step = 2) {
   // still tie for nearest. Clamp on the way out or chainage escapes the path.
   return Math.max(0, Math.min(best.km, path.length))
 }
+
+/**
+ * Empty-drive distance from a truck to a site, in km. Both carry a `chainage`
+ * (km-offset along the corridor). This is the shared replacement for the inline
+ * `Math.abs(site.chainage - truck.chainage)` idiom used by parking, scales, and
+ * the driver model.
+ *
+ * Returns null when either position is unknown — consistent with the
+ * feasibility layer's "unknown is not safe" rule: callers treat null as "no
+ * deadhead signal," never as 0 km.
+ */
+export function deadheadKm(truck, site) {
+  if (!truck || !site || truck.chainage == null || site.chainage == null) return null
+  return Math.abs(site.chainage - truck.chainage)
+}

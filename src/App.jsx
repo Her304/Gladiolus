@@ -29,12 +29,22 @@ function ViewLoader({ children }) {
 const serverClient = createServerClient({
   onEvent: (e) => {
     store.append(e.type, e.observedAt ?? e.at, e)
-    // SSE callbacks happen outside the simulator's batched tick.  Without this
-    // commit React never observes the authoritative events it just received.
-    store.commit()
+    scheduleStoreCommit()
   },
 })
 attachServerClient(serverClient)
+
+// SSE replay/live bursts can contain dozens of truck observations. Commit at
+// most once per animation frame so React sees one coherent fleet update rather
+// than rendering the map once for every message in the burst.
+let commitTimer = null
+function scheduleStoreCommit() {
+  if (commitTimer != null) return
+  commitTimer = setTimeout(() => {
+    commitTimer = null
+    store.commit()
+  }, 16)
+}
 
 /** Hash routing, because the whole app is four screens and a shared link. */
 function useHashRoute() {

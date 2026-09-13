@@ -1,5 +1,4 @@
 import { createStore } from './engine/events.js'
-import { createSimulator } from './engine/simulator.js'
 import { SERVER_BASE, SERVER_ENABLED } from './services/serverConfig.js'
 
 /**
@@ -15,12 +14,39 @@ import { SERVER_BASE, SERVER_ENABLED } from './services/serverConfig.js'
  */
 export const store = createStore()
 export const SERVER_URL = SERVER_ENABLED ? (SERVER_BASE || globalThis.location?.origin || 'same-origin') : ''
-export const sim = createSimulator(store, { startHour: 14 })
+
+// Keep the large physical model out of the normal server-backed browser
+// bundle. The facade also accepts feed updates while the local-only simulator
+// chunk is still loading.
+let simulator = null
+let requestedSpeed = 30
+let pendingIncidents = []
+let pendingFlow = []
+export const sim = {
+  setIncidents(list) {
+    pendingIncidents = list || []
+    simulator?.setIncidents(pendingIncidents)
+  },
+  setFlow(list) {
+    pendingFlow = list || []
+    simulator?.setFlow(pendingFlow)
+  },
+  setSpeed(value) {
+    requestedSpeed = Math.max(1, Math.min(240, value))
+    simulator?.setSpeed(requestedSpeed)
+  },
+  getSpeed: () => simulator?.getSpeed() ?? requestedSpeed,
+  getClock: () => simulator?.getClock() ?? 0,
+  getTruck: (id) => simulator?.getTruck(id),
+  driverParking: (...args) => simulator
+    ? simulator.driverParking(...args)
+    : { ok: false, error: 'Simulator is still loading.' },
+}
 
 const TICK_MS = 500
 let started = false
 
-export function startRuntime() {
+export async function startRuntime() {
   if (started) return
   started = true
   if (SERVER_ENABLED) {
@@ -30,7 +56,13 @@ export function startRuntime() {
     // real data enters only through ELD/order/billing adapters (Phase F).
     return
   }
-  // Dev/demo: run the seeded 40-truck simulation as display-only data.
-  sim.bootstrap()
-  setInterval(() => sim.advance(TICK_MS), TICK_MS)
+  // Dev/demo: load the physical model only when this browser is actually the
+  // data source. Server-backed clients never download or parse this chunk.
+  const { createSimulator } = await import('./engine/simulator.js')
+  simulator = createSimulator(store, { startHour: 14 })
+  simulator.setSpeed(requestedSpeed)
+  simulator.setIncidents(pendingIncidents)
+  simulator.setFlow(pendingFlow)
+  simulator.bootstrap()
+  setInterval(() => simulator.advance(TICK_MS), TICK_MS)
 }

@@ -9,7 +9,7 @@
  * exportable.
  */
 import { useMemo, useState } from 'react'
-import { useEvents } from '../useStore.js'
+import { useOperationalEvents } from '../useStore.js'
 import { useAuth, isAdmin } from '../auth/AuthContext.jsx'
 import { issueCommand, exportReviewedDetention } from '../services/serverApi.js'
 import { projectShipment, createShipment } from '../domain/shipment.js'
@@ -19,7 +19,7 @@ import { fmtTime } from '../format.js'
 const H = 3600_000
 
 export default function DetentionLedger() {
-  const events = useEvents()
+  const events = useOperationalEvents()
   const { user } = useAuth()
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')

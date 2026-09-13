@@ -157,12 +157,38 @@ export async function createServer({ dbPath = ':memory:', secret, roles = SEED_R
     await Promise.all([...subscribers].map((sub) => pumpSubscriber(sub)))
   }
 
+  // A simulator tick commonly persists 40 pings together. Coalesce those
+  // ingestion completions into one SSE pump instead of issuing a database scan
+  // and acknowledgement per truck.
+  let notifyPromise = null
+  let notifyRequested = false
+  function scheduleNotify() {
+    notifyRequested = true
+    if (notifyPromise) return notifyPromise
+    notifyPromise = new Promise((resolve) => {
+      setImmediate(async () => {
+        try {
+          do {
+            notifyRequested = false
+            await notify()
+          } while (notifyRequested)
+        } catch (error) {
+          console.error('SSE notification failed:', error?.message || error)
+        } finally {
+          notifyPromise = null
+          resolve()
+        }
+      })
+    })
+    return notifyPromise
+  }
+
   // Direct integration and simulator ingestion must wake SSE exactly like the
   // HTTP ingestion route. This hook also drives the freshness indicator.
   onIngestApplied = async (event) => {
     lastIngestAt = Date.now()
     lastIngestSource = event.source || 'live'
-    await notify()
+    await scheduleNotify()
   }
 
   const server = http.createServer(async (req, res) => {
@@ -335,7 +361,7 @@ export async function createServer({ dbPath = ':memory:', secret, roles = SEED_R
       const session = authorize(req)
       if (!session) return json(res, 401, { ok: false, error: 'unauthorized' })
       const r = await commandProcessor.handle(body, session)
-      if (r.ok) await notify()
+      if (r.ok) await scheduleNotify()
       return json(res, r.ok ? 201 : r.forbidden ? 403 : r.conflict ? 409 : 400, r)
     }
 

@@ -219,15 +219,37 @@ export function rebuild(events) {
  */
 export function createStore() {
   const events = []
+  const operationalEvents = []
+  const pingsByTruck = new Map()
   const feedEvents = []
   let world = emptyWorld()
   let seq = 0
   let version = 0
+  let operationalVersion = 0
+  let telemetryVersion = 0
+  let operationalSnapshot = []
+  const truckPingSnapshots = new Map()
+  let operationalDirty = false
+  const dirtyPingTrucks = new Set()
   const listeners = new Set()
+  const operationalListeners = new Set()
+  const telemetryListeners = new Set()
 
   function append(type, at, payload = {}) {
     const e = { seq: seq++, type, at, ...payload }
     events.push(e)
+    if (e.type === EVENT.PING && e.truckId) {
+      let pings = pingsByTruck.get(e.truckId)
+      if (!pings) {
+        pings = []
+        pingsByTruck.set(e.truckId, pings)
+      }
+      pings.push(e)
+      dirtyPingTrucks.add(e.truckId)
+    } else {
+      operationalEvents.push(e)
+      operationalDirty = true
+    }
     // A separate capped feed array keeps the human feed O(1) instead of a
     // backwards scan across tens of thousands of pings.
     if (isFeedWorthy(e)) {
@@ -246,6 +268,24 @@ export function createStore() {
       version++
       world = { ...world }
       for (const l of listeners) l()
+
+      // Operational screens do not need to refold tens of thousands of GPS
+      // pings. Publish their much smaller snapshot only when a non-ping event
+      // changed, and keep per-truck breadcrumb snapshots separate for the map.
+      if (operationalDirty) {
+        operationalDirty = false
+        operationalVersion++
+        operationalSnapshot = operationalEvents.slice()
+        for (const l of operationalListeners) l()
+      }
+      if (dirtyPingTrucks.size) {
+        for (const truckId of dirtyPingTrucks) {
+          truckPingSnapshots.set(truckId, pingsByTruck.get(truckId).slice())
+        }
+        dirtyPingTrucks.clear()
+        telemetryVersion++
+        for (const l of telemetryListeners) l()
+      }
     },
     getWorld: () => world,
     getVersion: () => version,
@@ -253,14 +293,38 @@ export function createStore() {
       listeners.add(l)
       return () => listeners.delete(l)
     },
+    getOperationalVersion: () => operationalVersion,
+    getOperationalEvents: () => operationalSnapshot,
+    subscribeOperational(l) {
+      operationalListeners.add(l)
+      return () => operationalListeners.delete(l)
+    },
+    getTelemetryVersion: () => telemetryVersion,
+    getTruckPings: (truckId) => truckPingSnapshots.get(truckId) || EMPTY_EVENTS,
+    subscribeTelemetry(l) {
+      telemetryListeners.add(l)
+      return () => telemetryListeners.delete(l)
+    },
     feed: (limit = 40) => feedEvents.slice(-limit).reverse(),
     reset() {
       events.length = 0
+      operationalEvents.length = 0
+      pingsByTruck.clear()
+      operationalSnapshot = []
+      truckPingSnapshots.clear()
+      operationalDirty = false
+      dirtyPingTrucks.clear()
       feedEvents.length = 0
       world = emptyWorld()
       seq = 0
       version++
+      operationalVersion++
+      telemetryVersion++
       for (const l of listeners) l()
+      for (const l of operationalListeners) l()
+      for (const l of telemetryListeners) l()
     },
   }
 }
+
+const EMPTY_EVENTS = Object.freeze([])

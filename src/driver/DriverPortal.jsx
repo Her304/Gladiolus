@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext.jsx'
-import { StoreContext, SimContext, useStore, useWorld, useSim, useEvents } from '../useStore.js'
+import { StoreContext, SimContext, useStore, useWorld, useSim } from '../useStore.js'
 import { SITE_BY_ID, facilitiesOf, VENDOR_BY_ID, vendorsNear, PARKING_SITES, SCALE_SITES } from '../data/corridor.js'
 import { SEED_DRIVERS } from '../data/seed.js'
 import { pressureBoard, recommendParking } from '../engine/parking.js'
@@ -88,7 +88,7 @@ export function DriverDemo() {
 }
 
 export default function DriverPortal({ demoController, incidents = INITIAL_INCIDENTS }) {
-  const demo = !!demoController, { user, signOut } = useAuth(), store = useStore(), sim = useSim(), world = useWorld(), events = useEvents()
+  const demo = !!demoController, { user, signOut } = useAuth(), store = useStore(), sim = useSim(), world = useWorld(), events = store.events
   const truckId = demo ? DEMO_ID : user?.truckId, truck = world.trucks[truckId]
   const [route, go] = useRoute(demo), [screen, siteId] = route.split('/')
   const [toast, setToast] = useState(''), [error, setError] = useState(''), [recenter, setRecenter] = useState(0)
@@ -112,6 +112,22 @@ export default function DriverPortal({ demoController, incidents = INITIAL_INCID
   const roadAhead = useMemo(() => truck ? incidentsAhead(truck, incidents) : [], [truck?.chainage, truck?.direction, incidents])
   const inspect = useMemo(() => truckId ? inspectionState(store.events, truckId, world.clock) : null, [store.getVersion(), truckId, world.clock])
   const breakdown = useMemo(() => truckId ? openBreakdown(store.events, truckId) : null, [store.getVersion(), truckId])
+  // mapPins is a hook, so it must run on every render in the same order —
+  // BEFORE the `!truck` early return. Previously it sat ~200 lines lower, after
+  // the return; the first render skipped it (no truck yet), and the render that
+  // received telemetry ran it for the first time — one extra hook → React threw
+  // "Rendered more hooks than during the previous render" and blanked the page.
+  const showParkingPins = ['parking', 'stop', 'claim'].includes(screen)
+  const showScalePins = ['scales', 'scale'].includes(screen)
+  const mapPins = useMemo(() => {
+    if (!truck) return []
+    if (showParkingPins) return PARKING_SITES.map(s => ({ id: s.id, name: s.name, coord: s.coord, kind: 'parking', onSelect: id => go(`stop/${id}`) }))
+    if (showScalePins) return SCALE_SITES
+      .filter(s => !s.direction || s.direction === truck.direction)
+      .map(s => ({ id: s.id, name: s.name, coord: s.coord, kind: 'scale', onSelect: id => go(`scale/${id}`) }))
+    return []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, showParkingPins, showScalePins, truck?.direction])
   if (!truck) return <div className="dp-shell"><main className="dp-login"><Empty title="Connecting to your truck">Waiting for the first telemetry update.</Empty></main></div>
   const destination = SITE_BY_ID[truck.destinationId], dock = SITE_BY_ID[truck.insideSiteId]?.kind === 'stop' && truck.state !== 'driving' ? SITE_BY_ID[truck.insideSiteId] : null
   const selected = board.find(p => p.site.id === siteId) || board.find(p => p.site.id === truck.claimedSiteId) || rec?.best
@@ -303,20 +319,8 @@ export default function DriverPortal({ demoController, incidents = INITIAL_INCID
   const mapTarget = target || destination
   const mapDistance = mapTarget ? Math.abs(mapTarget.chainage - truck.chainage) : 0
   const mapEta = Math.max(1, Math.round(mapDistance / Math.max(truck.speedKph, 40) * 60))
-  // On the parking and scales screens the map shows every site of that kind on
-  // the corridor, not just the opened one. Each pin carries its own navigation,
-  // so a tap lands the driver on that stop's or station's detail page.
-  const showParkingPins = ['parking', 'stop', 'claim'].includes(screen)
-  const showScalePins = ['scales', 'scale'].includes(screen)
-  const mapPins = useMemo(() => {
-    if (!truck) return []
-    if (showParkingPins) return PARKING_SITES.map(s => ({ id: s.id, name: s.name, coord: s.coord, kind: 'parking', onSelect: id => go(`stop/${id}`) }))
-    if (showScalePins) return SCALE_SITES
-      .filter(s => !s.direction || s.direction === truck.direction)
-      .map(s => ({ id: s.id, name: s.name, coord: s.coord, kind: 'scale', onSelect: id => go(`scale/${id}`) }))
-    return []
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, showParkingPins, showScalePins, truck?.direction])
+  // mapPins is now computed above, with the other hooks (before the `!truck`
+  // early return) so React's hook order stays stable across renders.
   const peeking = sheet === 'peek'
   const routeHeading = peeking && mapTarget
     ? 'Continue on Highway 401'

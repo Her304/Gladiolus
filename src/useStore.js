@@ -1,5 +1,7 @@
 import { createContext, useContext, useMemo, useSyncExternalStore } from 'react'
 
+const EMPTY_EVENTS = Object.freeze([])
+
 /**
  * React binding for the event store. `useSyncExternalStore` reads a version
  * counter rather than the world object, so a tick that appends 40 pings causes
@@ -41,4 +43,28 @@ export function useEvents() {
   const store = useStore()
   const version = useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion)
   return useMemo(() => store.events.slice(), [store, version])
+}
+
+/** Domain/configuration events without the high-volume GPS telemetry stream. */
+export function useOperationalEvents() {
+  const store = useStore()
+  useSyncExternalStore(
+    store.subscribeOperational || store.subscribe,
+    store.getOperationalVersion || store.getVersion,
+    store.getOperationalVersion || store.getVersion,
+  )
+  return store.getOperationalEvents ? store.getOperationalEvents() : store.events
+}
+
+/** Breadcrumbs for one focused truck, indexed as events arrive. */
+export function useTruckPings(truckId) {
+  const store = useStore()
+  useSyncExternalStore(
+    store.subscribeTelemetry || store.subscribe,
+    store.getTelemetryVersion || store.getVersion,
+    store.getTelemetryVersion || store.getVersion,
+  )
+  return truckId && store.getTruckPings
+    ? store.getTruckPings(truckId)
+    : EMPTY_EVENTS
 }

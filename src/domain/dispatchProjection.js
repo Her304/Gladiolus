@@ -14,7 +14,7 @@ export function projectDispatch(events = []) {
       })
     } else if (e.type === 'offer.created') {
       const load = loads.get(e.loadId)
-      if (load) Object.assign(load, { status: 'offered', offeredTo: e.driverId, truckId: e.truckId, feasibility: e.feasibility })
+      if (load) Object.assign(load, { status: 'offered', offeredTo: e.driverId, truckId: e.truckId, feasibility: e.feasibility, deadheadKm: e.deadheadKm ?? e.feasibility?.deadheadKm ?? null })
     } else if (e.type === 'offer.rejected') {
       const load = loads.get(e.loadId)
       if (load) Object.assign(load, { status: 'open', offeredTo: null, truckId: null })
@@ -44,8 +44,17 @@ export function projectDispatch(events = []) {
     }
   }
 
+  const loadList = [...loads.values()].sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0))
+  // Aggregate committed deadhead across offered/assigned loads — the empty km
+  // the fleet is currently committed to driving to pickup. Feeds the
+  // avoidableEmptyKm pilot metric from real data instead of a hand-entered
+  // number (plan §6).
+  const committedDeadheadKm = loadList
+    .filter((l) => l.status === 'offered' || l.status === 'assigned')
+    .reduce((sum, l) => sum + (Number(l.deadheadKm) || 0), 0)
   return {
-    loads: [...loads.values()].sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0)),
+    loads: loadList,
     exceptions: [...exceptions.values()].filter((e) => e.state !== 'resolved'),
+    emptyKm: { committedDeadheadKm },
   }
 }

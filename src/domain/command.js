@@ -81,17 +81,28 @@ export function gateAssignment({ duty, vehicle, route, equipment, weight, assign
  * "Implement feasibility filtering first, then rank only feasible candidates").
  * Loads with no feasible candidate surface as exceptions.
  *
+ * Ranking is feasibility-first: an infeasible load is never placed above a
+ * feasible one. Among the feasible set, when `positionFor` is supplied the
+ * loads are ordered by **deadhead distance asc** (nearest pickup first), then
+ * revenue desc — so the truck is matched to the load it can reach with the
+ * least empty running (plan: deadhead-aware load matching). Without
+ * `positionFor` it falls back to revenue desc, preserving the original behavior.
+ *
  * @param {object[]} candidates  load offers
  * @param {function} feasibilityFor  (candidate) => gateAssignment result
+ * @param {{positionFor?:function}} [opts]  positionFor(candidate) => number|null deadhead km
  * @returns {{feasible:object[], exceptions:object[]}}
  */
-export function rankCandidates(candidates, feasibilityFor) {
+export function rankCandidates(candidates, feasibilityFor, { positionFor } = {}) {
   const feasible = []
   const exceptions = []
   for (const c of candidates) {
     const f = feasibilityFor(c)
     if (f.verdict === VERDICT.FEASIBLE) {
-      feasible.push({ ...c, feasibility: f })
+      // deadheadKm is null when no position signal is available; known distances
+      // sort before unknown, which sort before nothing-at-all (revenue-only).
+      const dh = positionFor ? positionFor(c) : null
+      feasible.push({ ...c, feasibility: f, deadheadKm: dh ?? null })
     } else {
       exceptions.push({
         loadId: c.id,
@@ -101,7 +112,18 @@ export function rankCandidates(candidates, feasibilityFor) {
       })
     }
   }
-  // Rank feasible by revenue/contribution (simple: higher revenue first).
-  feasible.sort((a, b) => (b.revenue || 0) - (a.revenue || 0))
+  if (positionFor) {
+    feasible.sort((a, b) => {
+      // Known deadhead first (asc); unknown (null) after known; then revenue desc.
+      if (a.deadheadKm == null && b.deadheadKm == null) return (b.revenue || 0) - (a.revenue || 0)
+      if (a.deadheadKm == null) return 1
+      if (b.deadheadKm == null) return -1
+      if (a.deadheadKm !== b.deadheadKm) return a.deadheadKm - b.deadheadKm
+      return (b.revenue || 0) - (a.revenue || 0)
+    })
+  } else {
+    // No position signal: rank by revenue/contribution (higher revenue first).
+    feasible.sort((a, b) => (b.revenue || 0) - (a.revenue || 0))
+  }
   return { feasible, exceptions }
 }

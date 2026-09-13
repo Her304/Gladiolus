@@ -65,12 +65,13 @@ export function createSimService({ ingest, startHour = 14, speed = 30, onTick } 
   }
 
   function tick() {
+    const eventCount = internalStore.events.length
     sim.advance(TICK_MS)
     tickCount++
     // Notify SSE subscribers that new events are available. Without this the
     // browser's driver portal sits on "Waiting for the first telemetry update"
     // forever — the sim writes events but the stream never pushes them.
-    if (typeof onTick === 'function') onTick()
+    if (internalStore.events.length !== eventCount && typeof onTick === 'function') onTick()
   }
 
   return {

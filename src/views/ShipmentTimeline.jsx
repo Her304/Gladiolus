@@ -8,13 +8,13 @@
  * the whole sequence — milestones, detention, exceptions — in order.
  */
 import { useMemo, useState } from 'react'
-import { useEvents } from '../useStore.js'
+import { useOperationalEvents } from '../useStore.js'
 import { projectShipment, createShipment } from '../domain/shipment.js'
 import { DEFAULT_DETENTION_RULE } from '../domain/contract.js'
 import { fmtTime } from '../format.js'
 
 export default function ShipmentTimeline() {
-  const events = useEvents()
+  const events = useOperationalEvents()
   const shipments = useMemo(() => {
     const ids = [...new Set((events || []).map((e) => e.shipmentId).filter(Boolean))]
     return ids.map((id) => {

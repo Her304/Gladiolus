@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, TileLayer, Polyline, Circle, Marker, Tooltip, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -9,23 +9,26 @@ import { HOS_COLOUR, LEVEL_COLOUR, fmtTime } from '../format.js'
 import { haversine } from '../engine/geo.js'
 import { breadcrumbHistory } from '../domain/history.js'
 
-/** Map a corridor site id to its nearest regional-graph node id. */
-function siteToNode(siteId) {
-  const site = SITE_BY_ID[siteId]
-  if (!site) return null
+const NODE_BY_ID = new Map(NODES.map((node) => [node.id, node]))
+const SITE_NODE_BY_ID = new Map(SITES.map((site) => {
   let best = null, bestD = Infinity
-  for (const n of NODES) {
-    const d = haversine(site.coord, n.coord)
-    if (d < bestD) { bestD = d; best = n }
+  for (const node of NODES) {
+    const distance = haversine(site.coord, node.coord)
+    if (distance < bestD) { bestD = distance; best = node }
   }
-  return best
-}
+  return [site.id, best]
+}))
+const GRAPH_SEGMENTS = EDGES.map((edge, index) => ({
+  key: `rg-${index}`,
+  positions: [NODE_BY_ID.get(edge.from)?.coord, NODE_BY_ID.get(edge.to)?.coord].filter(Boolean),
+})).filter((segment) => segment.positions.length === 2)
+const ROUTE_CACHE = new Map()
 
 /** The graph path for a truck's active load: from its current node to its
  *  destination's node, as a polyline of node coordinates. */
 function truckRoutePath(truck) {
   if (!truck?.loadId || !truck?.destinationId) return null
-  const destNode = siteToNode(truck.destinationId)
+  const destNode = SITE_NODE_BY_ID.get(truck.destinationId)
   // The truck's current node: nearest to its current position.
   let curNode = null, curD = Infinity
   for (const n of NODES) {
@@ -33,9 +36,14 @@ function truckRoutePath(truck) {
     if (d < curD) { curD = d; curNode = n }
   }
   if (!curNode || !destNode || curNode.id === destNode.id) return null
-  const path = shortestPath(curNode.id, destNode.id)
+  const key = `${curNode.id}:${destNode.id}`
+  let path = ROUTE_CACHE.get(key)
+  if (!path) {
+    path = shortestPath(curNode.id, destNode.id)
+    ROUTE_CACHE.set(key, path)
+  }
   if (!path || path.path.length < 2) return null
-  return path.path.map((id) => NODES.find((n) => n.id === id)?.coord).filter(Boolean)
+  return path.path.map((id) => NODE_BY_ID.get(id)?.coord).filter(Boolean)
 }
 
 /**
@@ -54,22 +62,34 @@ const BASEMAPS = [
  * requested — which sidesteps the broken marker-image paths bundlers produce.
  */
 function truckIcon(colour, heading, dimmed) {
-  return L.divIcon({
+  const roundedHeading = Math.round((heading || 0) / 5) * 5
+  const key = `${colour}:${roundedHeading}:${dimmed ? 1 : 0}`
+  if (TRUCK_ICON_CACHE.has(key)) return TRUCK_ICON_CACHE.get(key)
+  const icon = L.divIcon({
     className: 'truck-icon',
     iconSize: [11, 11],
     iconAnchor: [6, 6],
-    html: `<div style="background:${colour};opacity:${dimmed ? 0.45 : 1};transform:rotate(${heading}deg)"></div>`,
+    html: `<div style="background:${colour};opacity:${dimmed ? 0.45 : 1};transform:rotate(${roundedHeading}deg)"></div>`,
   })
+  TRUCK_ICON_CACHE.set(key, icon)
+  return icon
 }
+const TRUCK_ICON_CACHE = new Map()
 
 function FlyTo({ coord }) {
   const map = useMap()
-  if (coord) map.flyTo(coord, Math.max(map.getZoom(), 10), { duration: 0.8 })
+  useEffect(() => {
+    if (coord) map.flyTo(coord, Math.max(map.getZoom(), 10), { duration: 0.8 })
+  }, [coord, map])
   return null
 }
 
-export default function MapPane({ world, events = [], incidents = [], board = [], focusId, focusCoord, onSelectTruck }) {
+export default function MapPane({ world, pings = [], incidents = [], board = [], focusId, focusCoord, isolateId, onSelectTruck }) {
   const trucks = useMemo(() => Object.values(world.trucks), [world])
+  // When a task card is expanded, the map isolates that one driver + route:
+  // only their marker stays full-strength and only their route is drawn, so
+  // the centre pane reads as "this driver's task" rather than the whole fleet.
+  const isolating = isolateId ? world.trucks[isolateId] : null
   const levelBySite = useMemo(
     () => Object.fromEntries(board.map((p) => [p.site.id, p.level])),
     [board],
@@ -78,8 +98,7 @@ export default function MapPane({ world, events = [], incidents = [], board = []
   const layer = BASEMAPS.find((b) => b.id === basemap)
   const trace = useMemo(() => {
     if (!focusId) return null
-    const pings = events.filter((e) => e.type === 'truck.ping' && e.truckId === focusId && e.truck?.coord)
-    const history = breadcrumbHistory(pings, world.clock)
+    const history = breadcrumbHistory(pings.filter((e) => e.truck?.coord), world.clock)
     const points = history.breadcrumbs.slice(-300)
     if (!points.length) return null
     const firstOdo = points.find((p) => Number.isFinite(p.odometerKm))?.odometerKm
@@ -91,7 +110,7 @@ export default function MapPane({ world, events = [], incidents = [], board = []
       averageKph: moving.length ? moving.reduce((sum, p) => sum + p.speedKph, 0) / moving.length : null,
       maxKph: moving.length ? Math.max(...moving.map((p) => p.speedKph)) : null,
     }
-  }, [events, focusId, world.clock])
+  }, [pings, focusId, world.clock])
 
   return (
     <div className="map-wrap">
@@ -107,20 +126,22 @@ export default function MapPane({ world, events = [], incidents = [], board = []
         {/* Regional road graph (Phase 5): the branches to Barrie, Peterborough,
             Pickering, and Niagara Falls via 401/403/400/QEW. So panning off the
             401 spine shows real routes, not empty map. */}
-        {EDGES.map((e, i) => {
-          const a = NODES.find((n) => n.id === e.from), b = NODES.find((n) => n.id === e.to)
-          if (!a || !b) return null
-          return <Polyline key={`rg-${i}`} positions={[a.coord, b.coord]} pathOptions={{ color: '#3a6f9e', weight: 1.5, opacity: 0.35, dashArray: '4 4' }} />
-        })}
+        {GRAPH_SEGMENTS.map((segment) => (
+          <Polyline key={segment.key} positions={segment.positions} pathOptions={{ color: '#3a6f9e', weight: 1.5, opacity: 0.35, dashArray: '4 4' }} />
+        ))}
 
         {/* Active load routes: for each laden truck, highlight its graph path
             (origin node → destination node) as a solid line so a judge can see
-            the truck routing across the real road network. */}
-        {trucks.filter((t) => t.laden && t.loadId).map((t) => {
-          const path = truckRoutePath(t)
-          if (!path || path.length < 2) return null
-          return <Polyline key={`route-${t.id}`} positions={path} pathOptions={{ color: '#16a34a', weight: 4, opacity: 0.7 }} />
-        })}
+            the truck routing across the real road network. When a task card is
+            expanded, only that driver's route is drawn — the rest of the fleet
+            fades out of the centre pane. */}
+        {trucks
+          .filter((t) => t.laden && t.loadId && (!isolating || t.id === isolating.id))
+          .map((t) => {
+            const path = truckRoutePath(t)
+            if (!path || path.length < 2) return null
+            return <Polyline key={`route-${t.id}`} positions={path} pathOptions={{ color: '#16a34a', weight: 4, opacity: 0.7 }} />
+          })}
 
         {SITES.map((s) => {
           const colour = s.kind === 'parking' ? (LEVEL_COLOUR[levelBySite[s.id]] ?? '#8b97a8') : '#8b97a8'
@@ -162,11 +183,12 @@ export default function MapPane({ world, events = [], incidents = [], board = []
 
         {trucks.map((t) => {
           const status = hosStatus(t)
+          const dimmed = (t.parked || false) || (isolating ? t.id !== isolating.id : false)
           return (
             <Marker
               key={t.id}
               position={t.coord}
-              icon={truckIcon(HOS_COLOUR[status], t.heading ?? 0, t.parked)}
+              icon={truckIcon(HOS_COLOUR[status], t.heading ?? 0, dimmed)}
               eventHandlers={onSelectTruck ? { click: () => onSelectTruck(t.id) } : undefined}
             >
               <Tooltip direction="top" offset={[0, -8]}>

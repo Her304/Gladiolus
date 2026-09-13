@@ -3,7 +3,8 @@ import MapPane from '../components/MapPane.jsx'
 import ParkingPanel from '../components/ParkingPanel.jsx'
 import EventFeed from '../components/EventFeed.jsx'
 import DispatchWorkflow from '../components/DispatchWorkflow.jsx'
-import { useWorld, useFeed, useSim, useEvents } from '../useStore.js'
+import TaskCard from '../components/TaskCard.jsx'
+import { useWorld, useFeed, useSim, useOperationalEvents, useTruckPings } from '../useStore.js'
 import { pressureBoard, recommendParking } from '../engine/parking.js'
 import { hosStatus, clockLeftMs, fmtClock } from '../engine/hos.js'
 import { ask, summariseBoard } from '../services/llm.js'
@@ -16,14 +17,25 @@ export default function DispatchBoard({ incidents }) {
   const world = useWorld()
   const feed = useFeed(40)
   const sim = useSim()
-  const events = useEvents()
+  const events = useOperationalEvents()
   const [focusId, setFocusId] = useState(null)
+  const [detailId, setDetailId] = useState(null)
   const [speed, setSpeed] = useState(() => sim?.getSpeed() ?? 30)
   const [answer, setAnswer] = useState(null)
   const [asking, setAsking] = useState(false)
+  const focusedPings = useTruckPings(focusId)
 
   const now = useMemo(() => new Date(world.clock), [world.clock])
   const board = useMemo(() => pressureBoard(world, now), [world, now])
+
+  /** Active tasks: one card per truck that is actually carrying freight or
+   *  heading to a destination. Empty, parked trucks with no destination are
+   *  fleet context, not a task a dispatcher is actively working. */
+  const tasks = useMemo(() => {
+    return Object.values(world.trucks)
+      .filter((t) => t.laden || t.destinationId)
+      .sort((a, b) => clockLeftMs(a) - clockLeftMs(b))
+  }, [world])
 
   /** Trucks that need a decision from a human in the next hour or so. */
   const alerts = useMemo(() => {
@@ -37,6 +49,17 @@ export default function DispatchBoard({ incidents }) {
     }
     return out.sort((a, b) => clockLeftMs(a.truck) - clockLeftMs(b.truck)).slice(0, 6)
   }, [world, now])
+
+  /** Opening a task's details isolates the centre map on that one driver and
+   *  their route; closing it returns to the full fleet view. The map reads this
+   *  as the truck to keep and dims the rest. */
+  function toggleDetails(truckId) {
+    setDetailId((cur) => {
+      const next = cur === truckId ? null : truckId
+      if (next) setFocusId(next)
+      return next
+    })
+  }
 
   async function askBoard() {
     setAsking(true)
@@ -62,14 +85,15 @@ export default function DispatchBoard({ incidents }) {
 
   return (
     <div className="board">
-      <DispatchWorkflow events={events} world={world} incidents={incidents} onFocusTruck={setFocusId} />
+      <DispatchWorkflow events={events} world={world} onFocusTruck={setFocusId} />
       <MapPane
         world={world}
-        events={events}
+        pings={focusedPings}
         incidents={incidents}
         board={board}
         focusId={focusId}
         focusCoord={focusCoord}
+        isolateId={detailId}
         onSelectTruck={setFocusId}
       />
 
@@ -91,6 +115,25 @@ export default function DispatchBoard({ incidents }) {
               </button>
             ))}
           </div>
+        </section>
+
+        {/* Active tasks — one card per in-motion assignment. Each is compact
+            (driver, route, HOS); Details expands to the assignment view and
+            isolates the centre map on that one driver. */}
+        <section className="panel task-list">
+          <h2>Active tasks <span className="count">{tasks.length}</span></h2>
+          {tasks.length === 0 && <p className="note">No trucks are carrying freight right now.</p>}
+          {tasks.map((truck) => (
+            <TaskCard
+              key={truck.id}
+              truck={truck}
+              events={events}
+              incidents={incidents}
+              expanded={detailId === truck.id}
+              onToggle={toggleDetails}
+              onFocusTruck={setFocusId}
+            />
+          ))}
         </section>
 
         <section className="panel">

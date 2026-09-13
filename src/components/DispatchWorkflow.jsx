@@ -3,105 +3,33 @@ import { STOP_SITES, SITE_BY_ID } from '../data/corridor.js'
 import { clockLeftMs, fmtClock, hosStatus } from '../engine/hos.js'
 import { projectDispatch } from '../domain/dispatchProjection.js'
 import { issueCommand } from '../services/serverApi.js'
-import { makeCustomerToken } from '../auth/AuthContext.jsx'
-import { incidentsAhead, incidentLabel } from '../services/on511.js'
-import { EVENT } from '../contract.js'
-import { fmtTime } from '../format.js'
+import { deadheadKm } from '../engine/geo.js'
 
-/** One plain-English line for an event in the assigned driver's log. A trimmed
- *  mirror of EventFeed's describe(), scoped to the events a dispatcher needs on
- *  an in-motion assignment (no pings, no other trucks). */
-function describeDriverEvent(e) {
-  switch (e.type) {
-    case EVENT.FENCE_ENTER: return `arrived at ${e.siteName}`
-    case EVENT.FENCE_EXIT:
-      return e.dwellMin >= 5 ? `left ${e.siteName} after ${e.dwellMin} min` : `passed ${e.siteName}`
-    case EVENT.LOAD_ASSIGNED: return `picked up ${e.loadId}`
-    case EVENT.LOAD_DELIVERED: return `delivered ${e.loadId} at ${e.siteName}`
-    case EVENT.BREAK_START: return `started a 10-hour reset at ${e.siteName}`
-    case EVENT.BREAK_END: return `back in service from ${e.siteName}`
-    case EVENT.PARKING_CLAIM: return `holding a space at ${e.siteName}`
-    case EVENT.PARKING_RELEASE: return `released a space at ${e.siteName}`
-    case EVENT.FORCED_STOP: return `out of hours, ${e.shortfallKm} km short of ${e.nearestSiteName}`
-    case EVENT.DRIVER_ACTION:
-      if (e.action === 'dispatch.replied') return `dispatch replied${e.message ? ` — ${e.message}` : ''}`
-      return `${e.action.replaceAll('.', ' ')}${e.message ? ` — ${e.message}` : ''}`
-    case EVENT.INSPECTION: return `${e.major ? 'failed' : 'flagged'} a ${e.phase} inspection`
-    case EVENT.BREAKDOWN: return `breakdown at km ${Math.round(e.chainage)}`
-    case EVENT.BREAKDOWN_CLEARED: return 'rolling again after a breakdown'
-    case EVENT.STOP_ARRIVED: return `arrived at stop ${e.stopId}`
-    case EVENT.STOP_CHECKED_IN: return `checked in at stop ${e.stopId}`
-    case EVENT.STOP_SERVICE_STARTED: return `service started at stop ${e.stopId}`
-    case EVENT.STOP_SERVICE_COMPLETED: return `service completed at stop ${e.stopId}`
-    case EVENT.STOP_DEPARTED: return `departed stop ${e.stopId}`
-    default: return e.type
-  }
-}
-
-export default function DispatchWorkflow({ events, world, incidents = [], onFocusTruck }) {
+export default function DispatchWorkflow({ events, world, onFocusTruck }) {
   const projection = useMemo(() => projectDispatch(events), [events])
   const [selectedId, setSelectedId] = useState(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState('')
-  const [linkBusy, setLinkBusy] = useState(null)
-  const [replyDraft, setReplyDraft] = useState('')
   const selected = projection.loads.find((l) => l.id === selectedId) || projection.loads.find((l) => l.status === 'open') || projection.loads[0]
+  const origin = selected ? SITE_BY_ID[selected.originId] : null
   const candidates = useMemo(() => {
-    if (!selected) return []
+    if (!selected || !origin) return []
     return Object.values(world.trucks)
       .filter((t) => !t.loadId || t.loadId === selected.id)
-      .map((truck) => ({ truck, left: clockLeftMs(truck), status: hosStatus(truck) }))
-      .sort((a, b) => b.left - a.left)
+      .map((truck) => ({ truck, left: clockLeftMs(truck), status: hosStatus(truck), deadhead: deadheadKm(truck, origin) }))
+      // Nearest-feasible first: deadhead asc (unknown after known), then most
+      // remaining HOS. Replaces the prior HOS-left-only ordering so the
+      // dispatcher sees the least-empty-running truck on top.
+      .sort((a, b) => {
+        if (a.deadhead == null && b.deadhead == null) return b.left - a.left
+        if (a.deadhead == null) return 1
+        if (b.deadhead == null) return -1
+        if (a.deadhead !== b.deadhead) return a.deadhead - b.deadhead
+        return b.left - a.left
+      })
       .slice(0, 6)
-  }, [world, selected?.id])
+  }, [world, selected?.id, origin])
   const assignedRevenue = projection.loads.filter((l) => l.status === 'assigned').reduce((sum, l) => sum + (Number(l.revenue) || 0), 0)
-
-  /** The assigned truck carrying the selected load. The request card is only for
-   *  loads that have left the queue and been assigned to a specific driver —
-   *  open/offered loads have no driver log or HOS to surface yet. */
-  const assignedTruck = useMemo(() => {
-    if (!selected || selected.status !== 'assigned' || !selected.truckId) return null
-    return world.trucks[selected.truckId] || null
-  }, [world, selected])
-
-  /** The driver's own event log for this truck — the slice a dispatcher cares
-   *  about when a load is in motion: requests, replies, arrivals, departures,
-   *  inspections and breakdowns. Pings are telemetry, not narrative. */
-  const driverLog = useMemo(() => {
-    if (!assignedTruck) return []
-    return events
-      .filter((e) => e.truckId === assignedTruck.id && e.type !== EVENT.TRUCK_PING)
-      .slice(-12)
-      .reverse()
-  }, [events, assignedTruck])
-
-  const roadAhead = useMemo(() => {
-    if (!assignedTruck) return []
-    return incidentsAhead(assignedTruck, incidents).slice(0, 4)
-  }, [assignedTruck, incidents])
-
-  /** Mint a shipment-scoped customer tracking link (server-signed). The board
-   *  never signs; the server returns the grant and we open it in a new tab. */
-  async function openCustomerLink(shipmentId) {
-    if (!shipmentId) return
-    setLinkBusy(shipmentId)
-    const token = await makeCustomerToken(shipmentId)
-    setLinkBusy(null)
-    if (token) window.open(`#/t/${token}`, '_blank')
-    else setMessage('Could not mint a customer link — the server may be unavailable.')
-  }
-
-  /** Message the assigned driver directly. Threads under nothing (a fresh
-   *  dispatch message, not a reply), so it reads on the driver's Today screen. */
-  async function messageDriver() {
-    const text = replyDraft.trim()
-    if (!text || !assignedTruck) return
-    setBusy('messageDriver' + assignedTruck.id)
-    const result = await issueCommand({ type: 'replyDriver', truckId: assignedTruck.id, message: text })
-    setMessage(result.ok ? `Message sent to ${assignedTruck.driverName}.` : `${result.error || 'Unable to message driver'}`)
-    setBusy('')
-    setReplyDraft('')
-  }
 
   async function run(command, success) {
     setBusy(command.type + (command.loadId || command.exceptionId || ''))
@@ -164,92 +92,16 @@ export default function DispatchWorkflow({ events, world, incidents = [], onFocu
       {selected && (
         <section className="workflow-section">
           <div className="workflow-title"><h2>Candidate comparison</h2><span>{selected.id}</span></div>
-          <p className="workflow-hint">The server rechecks trip HOS, equipment, gross/axle weight, vehicle blocks, and route before creating an offer.</p>
+          <p className="workflow-hint">The server rechecks trip HOS, equipment, gross/axle weight, vehicle blocks, and route before creating an offer. Candidates are ranked by deadhead to pickup.</p>
           {candidates.length === 0 && <p className="note">No unassigned truck currently has complete candidate data.</p>}
-          {candidates.map(({ truck, left, status }) => (
+          {candidates.map(({ truck, left, status, deadhead }, i) => (
             <div className="candidate" key={truck.id}>
-              <button className="candidate-focus" onClick={() => onFocusTruck(truck.id)}><b>{truck.id}</b><span>{truck.driverName}</span></button>
+              <button className="candidate-focus" onClick={() => onFocusTruck(truck.id)}><b>{truck.id}</b><span>{truck.driverName}{i === 0 && deadhead != null ? ' · nearest' : ''}</span></button>
+              <span className="deadhead">{deadhead != null ? `${Math.round(deadhead)} km` : '— km'}</span>
               <span className={`hos hos-${status}`}>{fmtClock(left)} HOS</span>
               <button className="ghost" disabled={selected.status !== 'open' || Boolean(busy)} onClick={() => run({ type: 'offerLoad', loadId: selected.id, driverId: truck.driverId, truckId: truck.id }, `${selected.id} offered to ${truck.driverName}.`)}>Offer</button>
             </div>
           ))}
-        </section>
-      )}
-
-      {/* The request card: shown once a load is assigned. Each system assigns
-          the requirements to a driver; the dispatcher receives this card with
-          the one driver and route that matter, their log and hours, the road
-          ahead, and the two ways out — a customer tracking link and a message
-          back to the driver. */}
-      {selected && assignedTruck && (
-        <section className="workflow-section request-card" aria-label="Assignment request card">
-          <div className="workflow-title">
-            <h2>Assignment</h2>
-            <span>{assignedTruck.id}</span>
-          </div>
-
-          <div className="request-head">
-            <button className="candidate-focus" onClick={() => onFocusTruck(assignedTruck.id)}>
-              <b>{assignedTruck.driverName}</b>
-              <span>{assignedTruck.id} · {SITE_BY_ID[selected.originId]?.name || selected.originId} → {SITE_BY_ID[selected.destinationId]?.name || selected.destinationId}</span>
-            </button>
-            <button className="primary-action request-link" disabled={linkBusy === selected.shipmentId} onClick={() => openCustomerLink(selected.shipmentId)}>
-              {linkBusy === selected.shipmentId ? 'Minting…' : 'Customer link'}
-            </button>
-          </div>
-
-          {/* Driver's hours of service */}
-          <div className="request-row">
-            <span className="request-label">Hours of service</span>
-            <span className={`hos hos-${hosStatus(assignedTruck)}`}>{fmtClock(clockLeftMs(assignedTruck))} left</span>
-          </div>
-
-          {/* Current or future road status on the driver's route */}
-          <div className="request-block">
-            <span className="request-label">Road status ahead</span>
-            {roadAhead.length === 0
-              ? <small className="note">No incidents reported between here and {SITE_BY_ID[selected.destinationId]?.name || 'the destination'}.</small>
-              : <ul className="request-log">
-                  {roadAhead.map((inc) => (
-                    <li key={inc.id}>
-                      <span className={`request-badge ${inc.fullClosure ? 'closure' : ''}`}>{incidentLabel(inc.type)}</span>
-                      <small>{Math.round(inc.ahead)} km ahead · {inc.fullClosure ? 'Full closure' : 'Lanes open'}</small>
-                    </li>
-                  ))}
-                </ul>}
-          </div>
-
-          {/* The driver's log — the same narrative fold the event feed uses,
-              scoped to this truck only */}
-          <div className="request-block">
-            <span className="request-label">Driver log</span>
-            {driverLog.length === 0
-              ? <small className="note">No driver events recorded yet.</small>
-              : <ul className="request-log">
-                  {driverLog.map((e) => (
-                    <li key={e.seq}>
-                      <time>{fmtTime(e.at)}</time>
-                      <span>{describeDriverEvent(e)}</span>
-                    </li>
-                  ))}
-                </ul>}
-          </div>
-
-          {/* Contact the driver or the customer */}
-          <div className="request-block">
-            <span className="request-label">Contact driver</span>
-            <form className="request-reply" onSubmit={(e) => { e.preventDefault(); messageDriver() }}>
-              <input
-                type="text"
-                value={replyDraft}
-                onChange={(e) => setReplyDraft(e.target.value)}
-                placeholder={`Message ${assignedTruck.driverName}…`}
-                maxLength={1000}
-                aria-label={`Message ${assignedTruck.driverName}`}
-              />
-              <button className="ghost" type="submit" disabled={!replyDraft.trim() || Boolean(busy)}>Send</button>
-            </form>
-          </div>
         </section>
       )}
 

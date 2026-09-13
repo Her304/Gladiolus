@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useEvents, useWorld } from '../../useStore.js'
+import { useOperationalEvents, useWorld } from '../../useStore.js'
 import { SITES, MIN_FENCE_M, offCorridorKm, BASE_SITE_CAPACITIES } from '../../data/corridor.js'
 import { pressureFor } from '../../engine/parking.js'
 import { APPROACH_KM } from '../../contract.js'
@@ -21,7 +21,7 @@ const CAPACITY_RANGE = { min: 1, max: 400 }
  */
 export default function SitesPanel({ user }) {
   const world = useWorld()
-  const events = useEvents()
+  const events = useOperationalEvents()
   const [drafts, setDrafts] = useState({})
   const [error, setError] = useState(null)
 

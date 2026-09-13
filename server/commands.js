@@ -6,7 +6,7 @@ import {
 } from '../src/domain/contract.js'
 import { axleWeightCompliance } from '../src/domain/weight.js'
 import { SITE_BY_ID, BASE_SITE_CAPACITIES } from '../src/data/corridor.js'
-import { haversine } from '../src/engine/geo.js'
+import { haversine, deadheadKm } from '../src/engine/geo.js'
 
 const H = 3600_000
 const STAFF = new Set(['dispatch', 'admin'])
@@ -77,6 +77,7 @@ export function createCommandProcessor({ store, loadBoard }) {
           await emit(r.event.type, now, {
             ...r.event, loadId: cmd.loadId, truckId: cmd.truckId,
             shipmentId: load.shipmentId, feasibility: decision,
+            deadheadKm: decision.deadheadKm,
             originId: load.originId, destinationId: load.destinationId,
             payloadKg: load.payloadKg, revenue: load.revenue,
             equipment: load.equipment, readyAt: load.readyAt,
@@ -84,6 +85,46 @@ export function createCommandProcessor({ store, loadBoard }) {
           })
         }
         return { ...r, feasibility: decision }
+      }
+
+      case 'recommendTrucks': {
+        // Pure read: given a load, return every truck with recent telemetry,
+        // feasibility-checked and ranked by deadhead asc (nearest feasible
+        // first). Emits nothing, reserves nothing — it informs the dispatcher's
+        // manual offerLoad, never replaces it (plan: recommend-only).
+        if (!STAFF.has(session.role)) return forbidden('only dispatch may request recommendations')
+        const load = loadBoard._loads.get(cmd.loadId)
+        if (!load) return { ok: false, error: 'unknown load' }
+        const events = await store.all()
+        // Latest ping per truck (keyed by truckId).
+        const latestByTruck = new Map()
+        for (const e of events) {
+          if (e.type !== EVENT.TRUCK_PING || !e.truckId) continue
+          const cur = latestByTruck.get(e.truckId)
+          if (!cur || (e.seq ?? e.at) > (cur.seq ?? cur.at)) latestByTruck.set(e.truckId, e)
+        }
+        const recommendations = []
+        for (const ping of latestByTruck.values()) {
+          const truck = ping.truck
+          if (!truck) continue
+          const driverId = truck.driverId
+          const decision = await candidateDecision(store, load, driverId, ping.truckId, now)
+          recommendations.push({
+            truckId: ping.truckId, driverId, name: truck.driverName || truck.id,
+            deadheadKm: decision.deadheadKm, verdict: decision.verdict, blockers: decision.blockers,
+          })
+        }
+        // Feasible first, ordered by deadhead asc (unknown deadhead after known);
+        // then infeasible/unresolved, also by deadhead asc for visibility.
+        const rank = (r) => (r.verdict === VERDICT.FEASIBLE ? 0 : 1)
+        recommendations.sort((a, b) => {
+          if (rank(a) !== rank(b)) return rank(a) - rank(b)
+          if (a.deadheadKm == null && b.deadheadKm == null) return 0
+          if (a.deadheadKm == null) return 1
+          if (b.deadheadKm == null) return -1
+          return a.deadheadKm - b.deadheadKm
+        })
+        return { ok: true, loadId: load.id, recommendations: recommendations.slice(0, 12) }
       }
 
       case 'acceptOffer': {
@@ -437,18 +478,24 @@ async function candidateDecision(store, load, driverId, truckId, now) {
   })
   const origin = SITE_BY_ID[load.originId]
   const destination = SITE_BY_ID[load.destinationId]
+  // Deadhead: the empty drive from the truck's current position to the load
+  // origin. It is added to the driving budget so HOS feasibility accounts for
+  // the pickup leg, not just the laden leg (plan: budget deadhead against HOS).
+  const deadhead = deadheadKm(truck, origin)
+  const deadheadMs = Number.isFinite(deadhead) ? deadhead / 70 * H : 0
   const distanceKm = origin && destination ? haversine(origin.coord, destination.coord) * 1.2 : null
-  const travelMs = Number.isFinite(distanceKm) ? distanceKm / 70 * H : 0
+  const travelMs = (Number.isFinite(distanceKm) ? distanceKm / 70 * H : 0) + deadheadMs
   const assignment = {
     drivingMs: travelMs,
     onDutyMs: travelMs + (load.serviceTimeMs || 0),
     elapsedMs: travelMs + (load.serviceTimeMs || 0),
   }
-  return gateAssignment({
+  const decision = gateAssignment({
     duty, vehicle,
     route: { edges: [], known: Boolean(origin && destination) },
     equipment, weight, assignment, now,
   })
+  return { ...decision, deadheadKm: deadhead ?? null }
 }
 
 function currentStopState(events, shipmentId, stopId) {
