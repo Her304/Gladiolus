@@ -30,10 +30,13 @@ export default function DispatchBoard({ incidents }) {
 
   /** Active tasks: one card per truck that is actually carrying freight or
    *  heading to a destination. Empty, parked trucks with no destination are
-   *  fleet context, not a task a dispatcher is actively working. */
+   *  fleet context, not a task a dispatcher is actively working. A truck only
+   *  counts as a task when it has a shipment linked (a load a dispatcher can
+   *  track and share with a customer) — empty/repositioning trucks are
+   *  excluded so the card never shows "No shipment linked". */
   const tasks = useMemo(() => {
     return Object.values(world.trucks)
-      .filter((t) => t.laden || t.destinationId)
+      .filter((t) => t.shipmentId)
       .sort((a, b) => clockLeftMs(a) - clockLeftMs(b))
   }, [world])
 

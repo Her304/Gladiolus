@@ -102,8 +102,8 @@ export function runDemonstrationShipment(opts = {}) {
   // Detention eligibility + calculation once service completes.
   const serviceComplete = visitEvents.find((e) => e.type === EVENT.STOP_SERVICE_COMPLETED)
   if (serviceComplete) {
-    push(EVENT.DETENTION_ELIGIBLE, serviceComplete.observedAt + MIN, { claimId: `CLM-${shipmentId}`, stopId, ruleId: rule.id })
-    push(EVENT.DETENTION_CALCULATED, serviceComplete.observedAt + 2 * MIN, { claimId: `CLM-${shipmentId}`, stopId, ruleId: rule.id, billableMinutes: scenario.startsWith('dwell-15') ? 30 : 0 })
+    push(EVENT.DETENTION_ELIGIBLE, serviceComplete.observedAt + MIN, { claimId: `CLM-${shipmentId}-${stopId}`, stopId, ruleId: rule.id })
+    push(EVENT.DETENTION_CALCULATED, serviceComplete.observedAt + 2 * MIN, { claimId: `CLM-${shipmentId}-${stopId}`, stopId, ruleId: rule.id, billableMinutes: scenario.startsWith('dwell-15') ? 30 : 0 })
   }
   // Once service is complete and detention is calculated, the shipment is
   // operationally complete (delivery confirmed, evidence accumulated).

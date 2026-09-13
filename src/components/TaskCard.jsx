@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { SITE_BY_ID, STOP_SITES } from '../data/corridor.js'
 import { clockLeftMs, fmtClock, hosStatus } from '../engine/hos.js'
 import { issueCommand } from '../services/serverApi.js'
@@ -86,7 +86,14 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [linkBusy, setLinkBusy] = useState(false)
+  const [linkUrl, setLinkUrl] = useState(null)
+  const [copied, setCopied] = useState(false)
   const [replyDraft, setReplyDraft] = useState('')
+
+  // Reset the minted link whenever the dispatcher switches task cards, so a URL
+  // minted for one shipment is never shown against another. The token itself
+  // stays valid server-side; only the local field is cleared.
+  useEffect(() => { setLinkUrl(null); setCopied(false) }, [truck.id, expanded])
 
   const route = useMemo(() => resolveRoute(truck, events), [truck, events])
   const status = hosStatus(truck)
@@ -115,13 +122,40 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
     setReplyDraft('')
   }
 
+  // Mint a shipment-scoped customer tracking link and surface the full URL so a
+  // dispatcher can copy it and hand it to the customer. The grant is durable
+  // (server-signed, expiring) so the same URL keeps working for this shipment's
+  // whole lifecycle — including after delivery, when the truck has moved on to
+  // its next load.
   async function openCustomerLink() {
     if (!truck.shipmentId) return
     setLinkBusy(true)
+    setCopied(false)
     const token = await makeCustomerToken(truck.shipmentId)
     setLinkBusy(false)
-    if (token) window.open(`#/t/${token}`, '_blank')
-    else setMessage('Could not mint a customer link — the server may be unavailable.')
+    if (token) {
+      const url = `${window.location.origin}${window.location.pathname}#/t/${token}`
+      setLinkUrl(url)
+      setMessage(`Customer link ready for ${truck.shipmentId}.`)
+    } else {
+      setLinkUrl(null)
+      setMessage('Could not mint a customer link — the server may be unavailable.')
+    }
+  }
+
+  async function copyCustomerLink() {
+    if (!linkUrl) return
+    try {
+      await navigator.clipboard.writeText(linkUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard API can be unavailable (non-secure context); fall back to
+      // selecting the readonly field so the dispatcher can copy manually.
+      const input = document.getElementById('task-customer-link-url')
+      input?.select()
+      setMessage('Copy the selected link.')
+    }
   }
 
   return (
@@ -150,17 +184,59 @@ export default function TaskCard({ truck, events, incidents, expanded, onToggle,
         <div className="task-detail">
           {message && <div className="task-message" role="status">{message}</div>}
 
-          {/* 1. Customer portal link */}
+          {/* 1. Customer portal link — a shipment-scoped tracking URL the
+              dispatcher can copy and hand to the customer. It follows this one
+              shipment's lifecycle (not the truck's next destination), so it stays
+              valid after delivery. */}
           <div className="task-section">
-            <span className="task-label">Customer portal</span>
-            <button
-              className="primary-action task-link"
-              disabled={!truck.shipmentId || linkBusy}
-              onClick={openCustomerLink}
-              title={truck.shipmentId ? 'Open a shipment-scoped tracking link' : 'No shipment linked to this task yet'}
-            >
-              {linkBusy ? 'Minting…' : truck.shipmentId ? 'Customer link' : 'No shipment linked'}
-            </button>
+            <span className="task-label">
+              Customer portal{truck.shipmentId ? ` · ${truck.shipmentId}` : ''}
+            </span>
+            {!linkUrl ? (
+              <button
+                className="primary-action task-link"
+                disabled={!truck.shipmentId || linkBusy}
+                onClick={openCustomerLink}
+                title={truck.shipmentId ? 'Mint a shipment-scoped tracking link to copy and send' : 'No shipment linked to this task yet'}
+              >
+                {linkBusy ? 'Minting…' : truck.shipmentId ? 'Get customer link' : 'No shipment linked'}
+              </button>
+            ) : (
+              <div className="task-link-row">
+                <input
+                  id="task-customer-link-url"
+                  className="task-link-url"
+                  value={linkUrl}
+                  readOnly
+                  onFocus={(e) => e.target.select()}
+                  aria-label="Customer tracking link"
+                />
+                <button
+                  className="ghost task-link-btn"
+                  onClick={copyCustomerLink}
+                  title="Copy the tracking link to the clipboard"
+                >
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+                <a
+                  className="ghost task-link-btn"
+                  href={linkUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open the customer portal in a new tab"
+                >
+                  Open
+                </a>
+                <button
+                  className="ghost task-link-btn task-link-redo"
+                  onClick={openCustomerLink}
+                  disabled={linkBusy}
+                  title="Mint a fresh link"
+                >
+                  ↻
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 5. Hours of service */}

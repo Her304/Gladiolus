@@ -475,7 +475,7 @@ export function createSimulator(store, { startHour = 14 } = {}) {
             const visit = foldVisit(visitEvents)
             const calc = calculateDetention(visit, DEFAULT_DETENTION_RULE)
             if (calc && calc.billableMinutes > 0) {
-              const claimId = `CLM-${t.shipmentId}`
+              const claimId = `CLM-${t.shipmentId}-${t.stopId}`
               store.append(V2_EVENT.DETENTION_ELIGIBLE, clock, {
                 claimId, shipmentId: t.shipmentId, stopId: t.stopId, ruleId: DEFAULT_DETENTION_RULE.id,
               })

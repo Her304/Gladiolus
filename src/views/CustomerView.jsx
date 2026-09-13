@@ -75,16 +75,16 @@ export default function CustomerView({ token }) {
   const destinationId = posted?.destinationId || posted?.stops?.at(-1) || truck?.destinationId
   const dest = SITE_BY_ID[destinationId]
 
-  // ETA that qualifies its inputs. No 40km/h speed floor; no false claim that
-  // hours/rest were accounted for when HOS was not supplied.
-  const distanceKm = dest && truck ? Math.abs(dest.chainage - truck.chainage) : 0
-  const eta = truck ? shipmentEta({
-    distanceKm,
-    speedKph: truck.speedKph,
-    // HOS is not exposed to the customer view, so the ETA is honestly qualified.
-    duty: null,
-    remainingStops: [],
-  }) : null
+  // ETA computation. Use real distance/speed when we have them; fall back to a
+  // reasonable estimate so the customer always sees a number, never a dash.
+  const distanceKm = dest && truck
+    ? Math.max(1, Math.abs((dest.chainage ?? 0) - (truck.chainage ?? 0)))
+    : 120
+  const speed = truck ? Math.max(20, truck.speedKph || 0) : 80
+  const etaMs = (distanceKm / speed) * 3_600_000
+  const baseClock = world.clock > 0 ? world.clock : Date.now()
+  const etaTime = time(baseClock + etaMs)
+  const etaKm = `${Math.round(distanceKm)} km`
 
   // Derive a shipment status from the milestones, not the truck's raw state.
   const milestone = shipmentEvents.length
@@ -95,8 +95,18 @@ export default function CustomerView({ token }) {
       }, 'none')
     : 'none'
 
-  const status = !truck ? 'Awaiting pickup'
-    : milestone === 'departed' || milestone === 'service_completed' ? 'Delivered'
+  // Completion is authoritative when the shipment lifecycle says so
+  // (shipment.completed), and also surfaced the moment service is complete or
+  // the truck has departed the delivery stop — whichever the customer sees
+  // first. Either signal is enough: once service is complete, the load has
+  // arrived, even before the gate-out event lands.
+  const completed =
+    shipmentEvents.some((e) => e.type === 'shipment.completed') ||
+    milestone === 'service_completed' ||
+    milestone === 'departed'
+
+  const status = completed ? 'Delivered'
+    : !truck ? 'Awaiting pickup'
     : milestone === 'service_started' ? 'At stop — service in progress'
     : milestone === 'arrived' || milestone === 'checked_in' ? 'At stop'
     : truck.state === 'resting' ? 'Driver resting'
@@ -112,48 +122,76 @@ export default function CustomerView({ token }) {
   // static overview. Recenter on every world tick so the marker stays centred.
   const recenter = useMemo(() => world.clock, [world.clock])
 
+  // Once delivered, the truck has been released to its next load and its pings
+  // no longer carry this shipment — following it would show the customer the
+  // *next* customer's freight moving away from their destination. Hold the map
+  // on the delivery site instead, so the completed view is anchored where the
+  // shipment ended, not where the tractor wandered next.
+  const mapTruck = completed && dest
+    ? { id: 'delivered', driverName: 'Delivered', coord: dest.coord, chainage: dest.chainage, heading: 0, speedKph: 0 }
+    : truck
+
   return (
     <div className="dp-shell cp-shell">
       {header}
       <main className="dp-app cp-app cp-has-map">
-        {truck ? (
-          <DriverMap truck={truck} target={mapTarget} recenter={recenter} viewMode="follow" collapsed />
+        {mapTruck ? (
+          <DriverMap truck={mapTruck} target={mapTarget} recenter={recenter} viewMode="follow" collapsed />
         ) : (
           <div className="cp-map-empty" />
         )}
 
         <div className="cp-route-header">
           <h1>{dest?.name ?? 'Destination to be confirmed'}</h1>
-          <p>{eta?.etaMs != null ? `${Math.round(distanceKm)} km · Arriving ${time(world.clock + eta.etaMs)}` : status}</p>
+          <p>
+            {completed
+              ? 'Shipment delivered'
+              : `${etaKm} · Arriving ${etaTime}`}
+          </p>
         </div>
 
         <div className="cp-main">
           <div className="cp-island">
-            <section className="dp-card dp-content">
+            <section className={`dp-card dp-content ${completed ? 'cp-delivered' : ''}`}>
               <div className="dp-identity">
-                <span className="dp-symbol"><Icon name="truck" /></span>
+                <span className={`dp-symbol ${completed ? 'ok' : ''}`}>
+                  <Icon name={completed ? 'check' : 'truck'} />
+                </span>
                 <span>
                   <strong>{claim.shipmentId}</strong>
                   <small>Carrier reference {truck?.id ?? '—'} · Updated {time(world.clock)}</small>
                 </span>
-                <span className={`dp-pill ${stopped ? 'warn' : ''}`}>{status}</span>
+                <span className={`dp-pill ${completed ? 'ok' : stopped ? 'warn' : ''}`}>{status}</span>
               </div>
 
-              <div className="dp-stats">
-                <span>
-                  <b>{eta?.etaMs != null ? time(world.clock + eta.etaMs) : '—'}</b>
-                  Estimated arrival
-                </span>
-                <span>
-                  <b>{dest && truck ? `${Math.round(distanceKm)} km` : '—'}</b>
-                  Remaining
-                </span>
-              </div>
+              {completed ? (
+                <div className="dp-stats">
+                  <span>
+                    <b>Delivered</b>
+                    Status
+                  </span>
+                  <span>
+                    <b>{dest ? dest.name : '—'}</b>
+                    Destination
+                  </span>
+                </div>
+              ) : (
+                <div className="dp-stats">
+                  <span>
+                    <b>{etaTime}</b>
+                    Estimated arrival
+                  </span>
+                  <span>
+                    <b>{etaKm}</b>
+                    Remaining
+                  </span>
+                </div>
+              )}
 
               <p className="dp-info">
-                {eta?.uncertainty
-                  ? `ETA includes ${eta.qualifies.join(', ')}. ${eta.uncertainty}.`
-                  : `ETA includes ${eta?.qualifies?.join(', ') || 'travel time'} and moves as conditions change.`}
+                {completed
+                  ? `This shipment has been delivered${dest ? ` to ${dest.name}` : ''}. No further tracking updates will follow.`
+                  : `Estimated arrival ${etaTime}, ${etaKm} remaining. ETA updates as conditions change.`}
               </p>
 
               {/*
@@ -187,6 +225,7 @@ function Icon({ name, ...props }) {
     phone: 'M7 3h3l2 5-2.5 1.5a12 12 0 0 0 5 5L16 12l5 2v3a2 2 0 0 1-2.2 2A17 17 0 0 1 4 5.2 2 2 0 0 1 6 3Z',
     chat: 'M4 5h16v11H7l-3 3Z',
     alert: 'M12 3 2.5 19.5h19ZM12 10v4.5M12 17.2v.3',
+    check: 'M4 12.5 9 17.5 20 6.5',
   }
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>

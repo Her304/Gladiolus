@@ -34,6 +34,9 @@
 .dp-blocker .dp-button,.dp-urgent .dp-button{margin-top:16px;background:#a8513a}
 .dp-blocker .dp-button:hover,.dp-urgent .dp-button:hover{background:#8d4229}
 .dp-symbol.warn{background:#f7e5da;color:#a8513a}
+.dp-symbol.ok{background:#e2f0e9;color:#0a7f3f}
+.dp-pill.ok{background:#e2f0e9;color:#0a7f3f}
+.cp-delivered .dp-info{background:#eaf3ec}
 .dp-breakdown-card{text-align:center}
 .dp-breakdown-card h2{color:#8d4733;margin-bottom:12px}
 .dp-breakdown-card p{font-size:13px;margin-bottom:20px}

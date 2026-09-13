@@ -94,6 +94,13 @@ export function createEldAdapter({ ingester, identityMap, health, loadBoard, sto
       const coord = obs.coord || [Number(obs.latitude), Number(obs.longitude)]
       const load = activeLoadFor(truckId)
       const shipmentId = obs.shipmentId ?? load?.shipmentId ?? null
+      // A real ELD carries the active load's destination and laden flag alongside
+      // the position; when the provider does not supply them, fall back to the
+      // committed assignment so a self-contained ping still renders on the board
+      // (the active-task filter is `laden || destinationId`).
+      const destinationId = obs.destinationId ?? load?.destinationId ?? null
+      const loadId = obs.loadId ?? load?.id ?? null
+      const laden = obs.laden ?? (load ? true : false)
       events.push({
         type: EVENT.TRUCK_PING,
         observedAt,
@@ -103,7 +110,7 @@ export function createEldAdapter({ ingester, identityMap, health, loadBoard, sto
         truckId,
         shipmentId,
         truck: {
-          id: truckId, driverId, coord,
+          id: truckId, driverId, driverName: obs.driverName, coord,
           speedKph: obs.speedKph ?? 0,
           odometerKm: obs.odometerKm,
           drivingMs: obs.drivingMs,
@@ -117,6 +124,10 @@ export function createEldAdapter({ ingester, identityMap, health, loadBoard, sto
           grossLimitKg: obs.grossLimitKg,
           axleLimitsKg: obs.axleLimitsKg,
           axleWeightsKg: obs.axleWeightsKg,
+          destinationId,
+          loadId,
+          shipmentId,
+          laden,
           state: obs.dutyStatus === 'driving' ? 'driving' : 'dwelling',
         },
       })

@@ -395,11 +395,18 @@ export async function createServer({ dbPath = ':memory:', secret, roles = SEED_R
       return json(res, 200, { ok: true, ...integrations.healthReport() })
     }
 
-    // ---- projections (authorized; shipment-scoped for customers) ----
+    // ---- projections (authorized; role-scoped) ----
+    // Row-level visibility is already enforced by eventVisibleTo (a driver sees
+    // only their own truck's events; a customer only their shipment). This gate
+    // adds role-level scoping: a driver may not read the dispatch/billing folds
+    // even filtered, and staff do not read the driver projection. Customer tokens
+    // have no business reading named projections.
     if (path.startsWith('/api/projections/') && req.method === 'GET') {
       const session = authorize(req)
       if (!session) return json(res, 401, { ok: false, error: 'unauthorized' })
       const name = path.split('/').pop()
+      const allowed = projectionAllowed(name, session)
+      if (!allowed.ok) return json(res, 403, allowed)
       let events = await store.all()
       events = events.filter((e) => eventVisibleTo(session, e))
       return json(res, 200, project(name, events))
@@ -576,6 +583,36 @@ function project(name, events) {
     default:
       return { error: `unknown projection: ${name}` }
     }
+}
+
+/**
+ * Role-level access control for named projections (the RLS boundary staff
+ * cannot cross by calling a different fold). Row-level filtering is applied
+ * after this; this gate exists so a driver cannot read the dispatch or billing
+ * folds at all, and a customer token cannot read any named projection.
+ *
+ *   dispatch → staff (dispatch/admin/integration)
+ *   billing  → admin only
+ *   driver   → driver (their own truck, row-filtered by eventVisibleTo)
+ */
+function projectionAllowed(name, session) {
+  if (session.scope === 'customer') return { ok: false, forbidden: true, error: 'customers may not read projections' }
+  switch (name) {
+    case 'dispatch':
+      return session.role === 'dispatch' || session.role === 'admin' || session.role === 'integration'
+        ? { ok: true }
+        : { ok: false, forbidden: true, error: 'staff only' }
+    case 'billing':
+      return session.role === 'admin'
+        ? { ok: true }
+        : { ok: false, forbidden: true, error: 'admin only' }
+    case 'driver':
+      return session.role === 'driver'
+        ? { ok: true }
+        : { ok: false, forbidden: true, error: 'driver only' }
+    default:
+      return { ok: false, forbidden: true, error: `unknown projection: ${name}` }
+  }
 }
 
 function readJson(req) {

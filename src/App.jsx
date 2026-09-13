@@ -62,6 +62,23 @@ function Clock() {
   return <span className="clock">{world.clock ? fmtTime(world.clock) : 'Awaiting data'}{SERVER_ENABLED ? '' : ' simulated'}</span>
 }
 
+/**
+ * Hold the dispatch board until the store has data. In server mode the store
+ * boots empty (emptyWorld, clock: 0) and the SSE stream fills it asynchronously;
+ * rendering the board during that gap showed its "no trucks" empty state for a
+ * beat before the cards flashed in. Gating on world.clock > 0 — the same signal
+ * Clock uses — means the board's first paint already has the fleet, so the cards
+ * render once and stay. In local/demo mode the sim bootstraps synchronously, so
+ * the gate passes immediately and nothing changes there.
+ */
+function BoardGate({ incidents }) {
+  const world = useWorld()
+  if (SERVER_ENABLED && !world.clock) {
+    return <div className="page"><div className="card">Connecting to the fleet…</div></div>
+  }
+  return <DispatchBoard incidents={incidents} />
+}
+
 function Shell() {
   const { user, signOut } = useAuth()
   const [hash, go] = useHashRoute()
@@ -117,6 +134,21 @@ function Shell() {
     return () => { alive = false; clearInterval(a); clearInterval(b) }
   }, [store, sim, user?.email])
 
+  // After sign-in, route each role to its own landing page and keep drivers off
+  // staff surfaces. A stale hash from a previous session on this device (a
+  // dispatcher who last left the tab on #/driver, or a driver on #/detention)
+  // is corrected here so nobody lands on the wrong portal. Customer tracking
+  // links (#/t/) and the no-auth demo (#/driver-demo) are left untouched.
+  useEffect(() => {
+    if (!user) return
+    const STAFF_ROUTES = ['#/board', '#/dashboard', '#/detention', '#/timeline', '#/admin']
+    if (isStaff(user)) {
+      if (hash === '' || hash === '#/driver') go('/board')
+    } else if (hash === '' || STAFF_ROUTES.includes(hash)) {
+      go('/driver')
+    }
+  }, [user?.email, hash])
+
   if (hash.startsWith('#/driver-demo')) return <ViewLoader><DriverDemo /></ViewLoader>
   // The driver portal is reachable by any signed-in user on the same device —
   // a dispatcher can switch to the driver view and vice versa. The hash decides
@@ -147,17 +179,20 @@ function Shell() {
   // in. A driver lands here by default; staff land on the board.
   if (hash.startsWith('#/driver')) return <ViewLoader><DriverView /></ViewLoader>
 
-  // Routing is a fold over (role, hash). A driver with no hash lands on the
-  // driver portal; staff land on the board. Either can navigate to the other.
+  // Routing is a fold over (role, hash). Staff routes (board, dashboard,
+  // detention, timeline, admin) are gated on `staff`: a driver who deep-links
+  // or manually sets #/detention etc. falls through to the driver portal
+  // instead of rendering a staff surface. A driver with no hash lands on the
+  // driver portal; staff land on the board.
   let view = 'driver'
-  if (staff || hash.startsWith('#/')) {
+  if (staff) {
     if (hash === '#/dashboard') view = 'dashboard'
     else if (hash === '#/detention') view = 'detention'
     else if (hash === '#/timeline') view = 'timeline'
     else if (hash === '#/admin') view = admin ? 'admin' : 'board'
-    else view = staff ? 'board' : 'driver'
+    else view = 'board'
   }
-  if (view === 'driver' && !hash.startsWith('#/driver')) return <ViewLoader><DriverView /></ViewLoader>
+  if (view === 'driver') return <ViewLoader><DriverView /></ViewLoader>
 
   return (
     <div className="app">
@@ -186,7 +221,7 @@ function Shell() {
       </header>
 
       <ViewLoader>
-        {view === 'board' && <DispatchBoard incidents={incidents} />}
+        {view === 'board' && <BoardGate incidents={incidents} />}
         {view === 'detention' && <DetentionLedger />}
         {view === 'timeline' && <ShipmentTimeline />}
         {view === 'dashboard' && <Dashboard />}

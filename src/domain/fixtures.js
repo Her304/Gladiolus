@@ -129,8 +129,8 @@ export function waiver() {
     name: 'waiver',
     events: [
       ...f.events,
-      { type: EVENT.DETENTION_CALCULATED, at: f.clock, claimId: 'CLM-1', stopId: MILTON_LONDON.deliveryStopId, billableMinutes: 30 },
-      { type: EVENT.DETENTION_WAIVED, at: f.clock + MIN, claimId: 'CLM-1', actor: 'billing', reason: 'customer goodwill' },
+      { type: EVENT.DETENTION_CALCULATED, at: f.clock, claimId: `CLM-${MILTON_LONDON.shipmentId}-${MILTON_LONDON.deliveryStopId}`, stopId: MILTON_LONDON.deliveryStopId, billableMinutes: 30 },
+      { type: EVENT.DETENTION_WAIVED, at: f.clock + MIN, claimId: `CLM-${MILTON_LONDON.shipmentId}-${MILTON_LONDON.deliveryStopId}`, actor: 'billing', reason: 'customer goodwill' },
     ],
     expect: { billableMinutes: 0, state: 'waived' },
   }
